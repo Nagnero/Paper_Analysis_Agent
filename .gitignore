@@ -1,0 +1,13 @@
+node_modules/
+data/
+dist-installers/
+dist/
+*.log
+.DS_Store
+Thumbs.db
+*.tmp
+.env
+.env.local
+
+# Claude Code 개발 도구 로컬 설정 (권한 허용 리스트 등 — 개인 환경 의존)
+.claude/

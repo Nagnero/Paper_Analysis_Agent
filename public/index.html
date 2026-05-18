@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Korean Paper Agent Console</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header class="top">
+    <div class="top-inner">
+      <div class="brand">Korean Paper Agent Console <span class="ver">v0.2</span></div>
+      <div class="top-actions">
+        <button type="button" id="openSettingsBtn" class="btn-ghost">⚙ 설정</button>
+        <button type="button" id="newAnalysisBtn" class="btn-ghost">새 분석</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="chat-main">
+    <div id="messages" class="messages" aria-live="polite"></div>
+  </main>
+
+  <div id="dropOverlay" class="drop-overlay" hidden>
+    <div class="drop-overlay-card">PDF를 여기에 놓으세요</div>
+  </div>
+
+  <footer class="composer">
+    <div class="composer-inner">
+      <div class="persona-row" role="radiogroup" aria-label="페르소나 선택">
+        <label class="seg"><input type="radio" name="persona" value="neutral" checked><span>중립</span></label>
+        <label class="seg"><input type="radio" name="persona" value="adversarial"><span>적대적 리뷰어</span></label>
+        <span id="composerHint" class="hint"></span>
+      </div>
+      <div id="attachmentChip" class="attach-chip" hidden>
+        <span class="chip-icon">📄</span>
+        <span id="attachName" class="chip-name"></span>
+        <span id="attachSize" class="chip-size"></span>
+        <button type="button" id="attachClear" class="chip-x" aria-label="첨부 제거">×</button>
+      </div>
+      <div class="composer-row">
+        <textarea id="composerInput" class="composer-input" rows="1" placeholder="메시지 또는 PDF 첨부 후 강조 사항..."></textarea>
+        <button type="button" id="attachBtn" class="icon-btn" title="PDF 첨부">📎</button>
+        <button type="button" id="sendBtn" class="send-btn" title="보내기" disabled>↑</button>
+        <input id="fileInput" type="file" accept="application/pdf,.pdf" hidden>
+      </div>
+    </div>
+  </footer>
+
+  <div id="settingsModal" class="modal" hidden>
+    <div class="modal-overlay" data-close></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-label="프롬프트 편집">
+      <div class="modal-head">
+        <h2>프롬프트 편집</h2>
+        <button type="button" class="modal-close" data-close aria-label="닫기">×</button>
+      </div>
+      <div class="modal-tabs">
+        <button type="button" class="tab active" data-tab="analyst">분석가</button>
+        <button type="button" class="tab" data-tab="verifier">검증가</button>
+        <button type="button" class="tab" data-tab="writer">작가</button>
+        <button type="button" class="tab" data-tab="orchestrator">오케스트레이터</button>
+      </div>
+      <div class="modal-body">
+        <div class="tab-pane active" data-pane="analyst">
+          <textarea id="promptAnalyst" spellcheck="false"></textarea>
+          <button type="button" class="btn-ghost small" data-reset="analyst">기본값으로 채우기 (저장 필요)</button>
+        </div>
+        <div class="tab-pane" data-pane="verifier">
+          <textarea id="promptVerifier" spellcheck="false"></textarea>
+          <button type="button" class="btn-ghost small" data-reset="verifier">기본값으로 채우기 (저장 필요)</button>
+        </div>
+        <div class="tab-pane" data-pane="writer">
+          <textarea id="promptWriter" spellcheck="false"></textarea>
+          <button type="button" class="btn-ghost small" data-reset="writer">기본값으로 채우기 (저장 필요)</button>
+        </div>
+        <div class="tab-pane" data-pane="orchestrator">
+          <textarea id="promptOrchestrator" spellcheck="false"></textarea>
+          <button type="button" class="btn-ghost small" data-reset="orchestrator">기본값으로 채우기 (저장 필요)</button>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" id="savePromptsBtn" class="primary">저장</button>
+        <span id="promptsStatus" class="hint"></span>
+        <span class="spacer"></span>
+        <button type="button" class="btn-ghost" data-close>닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

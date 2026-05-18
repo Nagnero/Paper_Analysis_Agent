@@ -1,0 +1,65 @@
+{
+  "name": "veridict",
+  "version": "0.1.0",
+  "private": true,
+  "description": "영어 논문 PDF를 멀티에이전트로 분석해 claim별 원문 근거가 매핑된 한국어 리포트를 생성하는 데스크탑 콘솔",
+  "type": "module",
+  "main": "electron-main.mjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "electron .",
+    "cli": "node server.js",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:linux": "electron-builder --linux",
+    "dist:mac": "electron-builder --mac"
+  },
+  "dependencies": {
+    "pdf-parse": "^1.1.4"
+  },
+  "devDependencies": {
+    "electron": "^42.1.0",
+    "electron-builder": "^26.8.1"
+  },
+  "author": "kjy56514415 <kjy56514415@gmail.com>",
+  "license": "MIT",
+  "build": {
+    "appId": "com.veridict.app",
+    "productName": "Veridict",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron-main.mjs",
+      "server.js",
+      "pipeline.js",
+      "agents/**/*",
+      "core/**/*",
+      "utils/**/*",
+      "prompts/**/*",
+      "public/**/*",
+      "package.json",
+      "LICENSE",
+      "!**/.DS_Store",
+      "!**/{test,__tests__,tests,powered-test,example,examples}"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.productivity"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Office"
+    }
+  }
+}
