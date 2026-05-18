@@ -8,8 +8,9 @@ import { readFile, mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
 import { runPipeline } from './pipeline.js';
-import { callClaude } from './core/claudeClient.js';
+import { callClaude, checkAuthStatus } from './core/claudeClient.js';
 import { getCurrent as getPrompts, setCurrent as setPrompts, loadDefaults as loadDefaultPrompts } from './core/promptStore.js';
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
@@ -31,6 +32,7 @@ const STATIC = {
   '/': { file: 'public/index.html', type: 'text/html; charset=utf-8' },
   '/app.css': { file: 'public/app.css', type: 'text/css; charset=utf-8' },
   '/app.js': { file: 'public/app.js', type: 'application/javascript; charset=utf-8' },
+  '/setup': { file: 'public/setup.html', type: 'text/html; charset=utf-8' },
 };
 
 function sseWrite(res, payload) {
@@ -326,6 +328,43 @@ async function handleAnalyze(req, res) {
   res.end(JSON.stringify({ error: 'unsupported content-type' }));
 }
 
+async function handleClaudeStatus(req, res) {
+  try {
+    const status = await checkAuthStatus();
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify(status));
+  } catch (err) {
+    res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ binary: false, authenticated: false, errorMessage: err.message }));
+  }
+}
+
+// 새 터미널 창을 띄워 `claude auth login` 실행 — 사용자가 그 안에서 OAuth 진행.
+async function handleClaudeLogin(req, res) {
+  try {
+    if (process.platform === 'win32') {
+      // 새 cmd 창 + claude auth login. /k 로 명령 끝난 후 창 유지.
+      spawn('cmd', ['/c', 'start', '', 'cmd', '/k', 'claude auth login'], { detached: true, shell: false });
+    } else if (process.platform === 'darwin') {
+      spawn('osascript', ['-e', 'tell application "Terminal" to do script "claude auth login"'], { detached: true });
+    } else {
+      // Linux: 흔한 터미널 후보들 순차 시도
+      const candidates = ['x-terminal-emulator', 'gnome-terminal', 'konsole', 'xterm'];
+      for (const term of candidates) {
+        try {
+          spawn(term, ['-e', 'claude auth login'], { detached: true });
+          break;
+        } catch { /* 다음 후보 */ }
+      }
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ ok: true }));
+  } catch (err) {
+    res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ ok: false, error: err.message }));
+  }
+}
+
 async function handleStatic(req, res) {
   const entry = STATIC[req.url];
   if (!entry) {
@@ -355,6 +394,10 @@ function createAppServer() {
       handlePromptsDefaultsGet(req, res);
     } else if (req.method === 'PUT' && req.url === '/api/prompts') {
       handlePromptsPut(req, res);
+    } else if (req.method === 'GET' && req.url === '/api/claude-status') {
+      handleClaudeStatus(req, res);
+    } else if (req.method === 'POST' && req.url === '/api/claude-login') {
+      handleClaudeLogin(req, res);
     } else if (req.method === 'GET') {
       handleStatic(req, res);
     } else {

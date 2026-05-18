@@ -87,6 +87,54 @@ export async function callClaude(prompt, opts = {}) {
 }
 
 /**
+ * claude CLI 존재 + 인증 상태를 한 번에 확인.
+ * @returns {Promise<{ binary: boolean, authenticated: boolean, email?: string, subscriptionType?: string, errorMessage?: string }>}
+ */
+export async function checkAuthStatus() {
+  // 1단계: binary 존재 여부
+  const binaryOk = await new Promise((resolve) => {
+    let settled = false;
+    const done = (ok) => { if (!settled) { settled = true; resolve(ok); } };
+    try {
+      const proc = spawn(`${CLAUDE_BIN} --version`, [], { shell: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      proc.on('error', () => done(false));
+      proc.on('close', code => done(code === 0));
+      setTimeout(() => { try { proc.kill(); } catch {} ; done(false); }, 5000);
+    } catch { done(false); }
+  });
+  if (!binaryOk) return { binary: false, authenticated: false };
+
+  // 2단계: 인증 상태 (claude auth status --json)
+  return await new Promise((resolve) => {
+    let settled = false;
+    const done = (result) => { if (!settled) { settled = true; resolve(result); } };
+    try {
+      const proc = spawn(`${CLAUDE_BIN} auth status --json`, [], { shell: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = '', stderr = '';
+      proc.stdout.on('data', d => { stdout += d.toString('utf8'); });
+      proc.stderr.on('data', d => { stderr += d.toString('utf8'); });
+      proc.on('error', err => done({ binary: true, authenticated: false, errorMessage: err.message }));
+      proc.on('close', () => {
+        try {
+          const json = JSON.parse(stdout);
+          done({
+            binary: true,
+            authenticated: !!json.loggedIn,
+            email: json.email,
+            subscriptionType: json.subscriptionType,
+          });
+        } catch {
+          done({ binary: true, authenticated: false, errorMessage: stderr || 'auth status 파싱 실패' });
+        }
+      });
+      setTimeout(() => { try { proc.kill(); } catch {} ; done({ binary: true, authenticated: false, errorMessage: 'auth status 타임아웃' }); }, 8000);
+    } catch (err) {
+      done({ binary: true, authenticated: false, errorMessage: err.message });
+    }
+  });
+}
+
+/**
  * JSON 응답을 강제. 1회 재시도.
  * @param {string} prompt
  * @param {string} schemaHint
