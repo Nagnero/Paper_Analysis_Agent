@@ -63,7 +63,7 @@
 | 항목 | 버전 / 설명 |
 |---|---|
 | **OS** | Windows 10/11 (검증), macOS / Linux (코드 호환, 미검증) |
-| **Node.js** | 20 이상 |
+| **Node.js** | **24.15.0 (LTS) 권장** · `>=20 <26` 범위 지원. Node 26+ 에서 electron post-install 다운로드 실패 케이스 보고됨 |
 | **Claude Code CLI** | https://claude.com/code — 사전 설치 + `claude` 한 번 실행해 본인 계정 로그인 필요 |
 | **구독** | Claude Pro 또는 Max (사용자 본인 계정) |
 
@@ -116,6 +116,22 @@ node pipeline.js path/to/paper.pdf
 5. 같은 세션에서 후속 질문 (페르소나 선택 가능)
 
 ## 트러블슈팅
+
+### `Error: ENOENT ... node_modules\electron\path.txt`
+
+`npm install` 시 electron 바이너리(약 100MB) post-install 다운로드가 실패한 상태. **Node 24 LTS 사용 권장** — Node 26 이상에서 silent fail 사례 보고됨.
+
+```powershell
+# 1) node -v 로 24.x 인지 확인 (아니면 nvm 등으로 24.15.0 설치)
+# 2) electron 모듈만 재설치
+Remove-Item -Recurse -Force node_modules\electron -ErrorAction SilentlyContinue
+npm install electron@^42.1.0
+# 3) 다운로드 끝났는지 확인 (True 떠야 함)
+node -e "console.log(require('fs').existsSync('node_modules/electron/path.txt'))"
+npm start
+```
+
+직접 진단하려면 `node node_modules\electron\install.js` 로 post-install 을 강제 실행 — 네트워크/프록시/권한 에러가 콘솔에 그대로 나옵니다.
 
 ### `claude.cmd` is not recognized / 안내 화면이 떠요
 
