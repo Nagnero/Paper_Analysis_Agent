@@ -51,7 +51,7 @@ export async function callCodex(prompt, opts = {}) {
 
     const model = safeModel(opts.model || CODEX_MODEL);
     const reasoningEffort = safeReasoningEffort(opts.reasoningEffort);
-    const cmdParts = [CODEX_BIN, 'exec', '--model', model, '-c', `model_reasoning_effort=${reasoningEffort}`];
+    const cmdParts = [CODEX_BIN, 'exec', '--skip-git-repo-check', '--model', model, '-c', `model_reasoning_effort=${reasoningEffort}`];
     const command = `${cmdParts.join(' ')} < "${promptFile}"`;
 
     const startedAt = Date.now();
@@ -59,6 +59,7 @@ export async function callCodex(prompt, opts = {}) {
       const proc = spawn(command, [], {
         shell: true,
         stdio: ['ignore', 'pipe', 'pipe'],
+        cwd: tempDir,
       });
 
       proc.stdout.setEncoding('utf8');
