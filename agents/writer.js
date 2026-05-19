@@ -1,9 +1,9 @@
 // agents/writer.js
 // 작가 에이전트: 검증된 claim + 재현가능성 정보로 한국어 11섹션 Markdown 리포트 작성.
-import { callClaude } from '../core/claudeClient.js';
+import { callLLM } from '../core/llm.js';
 import { fillTemplate, buildEmphasisBlock } from '../core/promptStore.js';
 
-export async function run({ title, verifiedClaims, reproducibility, prompts, emphasis, auditResults, reportSectionsToEmphasize, additionalReportSections, onMeta }) {
+export async function run({ title, verifiedClaims, reproducibility, prompts, emphasis, auditResults, reportSectionsToEmphasize, additionalReportSections, llm = {}, onMeta }) {
   const flatClaims = verifiedClaims.map(v => ({
     id: v.claim?.id ?? v.claimId ?? '',
     text: v.claim?.text ?? '',
@@ -42,8 +42,11 @@ export async function run({ title, verifiedClaims, reproducibility, prompts, emp
     additionalSections_block: additionalBlock,
   });
   let meta;
-  const out = await callClaude(filled, {
+  const out = await callLLM(filled, {
     timeoutMs: 900_000,
+    backend: llm.backend,
+    model: llm.model,
+    reasoningEffort: llm.reasoningEffort,
     onMeta: m => { meta = m; },
   });
   if (onMeta && meta) onMeta(meta);

@@ -10,8 +10,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { runPipeline } from './pipeline.js';
-import { callClaude, checkAuthStatus } from './core/claudeClient.js';
+import { checkAuthStatus } from './core/claudeClient.js';
+import { callLLM } from './core/llm.js';
 import { getCurrent as getPrompts, setCurrent as setPrompts, loadDefaults as loadDefaultPrompts } from './core/promptStore.js';
+import * as llmConfig from './core/llmConfig.js';
+import * as authStatus from './core/authStatus.js';
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 const SESSION_TTL_MS = 60 * 60 * 1000;
@@ -50,6 +53,14 @@ function startSse(res) {
 
 async function runAndStream(pdfPath, res, emphasis) {
   try {
+    const auth = await authStatus.checkAll();
+    llmConfig.applyAvailability(auth);
+    const required = collectAnalysisBackends(emphasis);
+    const missing = missingLoginBackend(auth, required);
+    if (missing) {
+      sseWrite(res, { stage: 'error', message: `분석 실패: ${missing}에 로그인이 필요합니다. 설정에서 다른 백엔드로 바꾸거나 로그인하세요.` });
+      return;
+    }
     const { report, parsed, sessionId, paperText, analyst, verifiedClaims, metrics, directive, auditResults } =
       await runPipeline(pdfPath, p => sseWrite(res, p), { emphasis });
     gcSessions();
@@ -58,12 +69,37 @@ async function runAndStream(pdfPath, res, emphasis) {
       paperTitle: parsed.title,
       paperText,
       report,
-      chatStarted: false,
+      chatStartedByBackend: { claude: false, codex: false },
     });
     sseWrite(res, { stage: 'done', message: '완료', report, sessionId, analyst, verifiedClaims, metrics, directive, auditResults });
   } catch (err) {
     sseWrite(res, { stage: 'error', message: `실패: ${err.message}` });
   }
+}
+
+// 분석 파이프라인이 실제 호출할 backend 집합을 반환.
+// emphasis 가 비어있으면 orchestrator/audit 는 호출되지 않음(pipeline 동작과 일치).
+function collectAnalysisBackends(emphasis) {
+  const cfg = llmConfig.getConfig();
+  const roles = ['analyst', 'verifier', 'writer'];
+  if (emphasis && emphasis.trim()) {
+    roles.unshift('orchestrator');
+    roles.push('audit');
+  }
+  const backends = new Set();
+  for (const r of roles) {
+    const role = cfg[r];
+    if (role && role.backend) backends.add(role.backend);
+  }
+  return [...backends];
+}
+
+function missingLoginBackend(authResult, backends) {
+  for (const b of backends) {
+    const entry = authResult[b];
+    if (!entry || !entry.loggedIn) return b;
+  }
+  return null;
 }
 
 async function handleChat(req, res) {
@@ -80,7 +116,7 @@ async function handleChat(req, res) {
     return;
   }
 
-  const { sessionId, question, persona } = payload;
+  const { sessionId, question } = payload;
   if (typeof sessionId !== 'string' || !sessionId) {
     res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ error: 'sessionId required' }));
@@ -105,16 +141,21 @@ async function handleChat(req, res) {
     return;
   }
 
-  const personaInstruction = persona === 'adversarial'
-    ? `당신은 학회 리뷰어입니다. 답변할 때 다음 원칙을 따르세요:
-1. 사용자의 질문에 사실에 입각해 답하세요.
-2. 답변 끝에 항상 회의적인 시각으로 도전 질문 1개를 추가하세요 ("그런데 X 가정이 깨지면?", "이 결론은 Y 조건에서도 성립하는가?" 등).
-3. 논문이 명시하지 않은 부분에 추측을 더할 때는 명확히 "추측: ..."이라고 표시하세요.`
-    : '';
+  const chatAuth = await authStatus.checkAll();
+  llmConfig.applyAvailability(chatAuth);
+  const chatCfg = llmConfig.getRole('chat');
+  const chatEntry = chatAuth[chatCfg.backend];
+  if (!chatEntry || !chatEntry.loggedIn) {
+    res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ error: `${chatCfg.backend}에 로그인이 필요합니다. 설정에서 다른 백엔드로 바꾸거나 로그인하세요.` }));
+    return;
+  }
+  // codex 백엔드는 세션 미지원 → 매번 paperText+report 포함한 fresh 프롬프트 사용
+  const useFreshPrompt = chatCfg.backend === 'codex' || !sess.chatStartedByBackend[chatCfg.backend];
 
   let promptText;
   let callOpts;
-  if (!sess.chatStarted) {
+  if (useFreshPrompt) {
     promptText = `다음 영어 논문과 한국어 분석 리포트를 참고해 사용자 질문에 답하세요.
 
 ## 논문 원문 (요약본)
@@ -125,20 +166,28 @@ ${sess.report ?? ''}
 
 --- 위는 컨텍스트 ---
 
-${personaInstruction}
-
 사용자 질문: ${question}`;
-    callOpts = { sessionId, timeoutMs: 600_000 };
+    callOpts = {
+      backend: chatCfg.backend,
+      model: chatCfg.model,
+      reasoningEffort: chatCfg.reasoningEffort,
+      timeoutMs: 600_000,
+    };
+    if (chatCfg.backend !== 'codex') callOpts.sessionId = sessionId;
   } else {
-    promptText = personaInstruction
-      ? `${personaInstruction}\n사용자 질문: ${question}`
-      : question;
-    callOpts = { resume: sessionId, timeoutMs: 600_000 };
+    promptText = question;
+    callOpts = {
+      backend: chatCfg.backend,
+      model: chatCfg.model,
+      reasoningEffort: chatCfg.reasoningEffort,
+      resume: sessionId,
+      timeoutMs: 600_000,
+    };
   }
 
   try {
-    const answer = await callClaude(promptText, callOpts);
-    sess.chatStarted = true;
+    const answer = await callLLM(promptText, callOpts);
+    if (chatCfg.backend !== 'codex') sess.chatStartedByBackend[chatCfg.backend] = true;
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ answer }));
   } catch (err) {
@@ -229,10 +278,23 @@ function readEmphasisHeader(req) {
 }
 
 async function handleRawAnalyze(req, res) {
-  startSse(res);
-
   const filename = safeUploadName(req);
   const emphasis = readEmphasisHeader(req);
+
+  // preflight: 업로드(최대 50MB) 받기 전에 인증 게이트 검사 → 헛수고 방지
+  const preAuth = await authStatus.checkAll();
+  llmConfig.applyAvailability(preAuth);
+  const requiredBackends = collectAnalysisBackends(emphasis);
+  const preMissing = missingLoginBackend(preAuth, requiredBackends);
+  if (preMissing) {
+    startSse(res);
+    sseWrite(res, { stage: 'error', message: `분석 실패: ${preMissing}에 로그인이 필요합니다. 설정에서 다른 백엔드로 바꾸거나 터미널에서 ${preMissing} 로그인 후 다시 시도하세요.` });
+    res.end();
+    return;
+  }
+
+  startSse(res);
+
   let tempDir;
   try {
     tempDir = await mkdtemp(path.join(os.tmpdir(), 'kpac-'));
@@ -314,6 +376,72 @@ async function handlePromptsPut(req, res) {
   res.end(JSON.stringify(next));
 }
 
+async function handleLlmConfigGet(req, res) {
+  const s = await authStatus.checkAll();
+  llmConfig.applyAvailability(s);
+  res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify(llmConfig.getConfig()));
+}
+
+async function handleLlmConfigDefaultsGet(req, res) {
+  const s = await authStatus.checkAll();
+  res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify(llmConfig.getDefaults(s)));
+}
+
+async function handleLlmConfigPut(req, res) {
+  let body = '';
+  req.setEncoding('utf8');
+  for await (const chunk of req) body += chunk;
+
+  let payload;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ error: 'invalid JSON' }));
+    return;
+  }
+  if (!payload || typeof payload !== 'object') {
+    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ error: 'JSON object required' }));
+    return;
+  }
+  for (const role of llmConfig.ROLES) {
+    if (role in payload) {
+      const entry = payload[role];
+      if (!entry || typeof entry !== 'object') {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: `${role} must be object` }));
+        return;
+      }
+      if (entry.backend !== undefined && entry.backend !== 'claude' && entry.backend !== 'codex') {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: `${role}.backend must be 'claude' or 'codex'` }));
+        return;
+      }
+      if (entry.model !== undefined && typeof entry.model !== 'string') {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: `${role}.model must be string` }));
+        return;
+      }
+      if (entry.reasoningEffort !== undefined && typeof entry.reasoningEffort !== 'string') {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: `${role}.reasoningEffort must be string` }));
+        return;
+      }
+      if (entry.reasoningEffort !== undefined && entry.reasoningEffort !== '' && !llmConfig.isCodexReasoningEffort(entry.reasoningEffort)) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: `${role}.reasoningEffort must be one of ${llmConfig.CODEX_REASONING_EFFORTS.join(', ')}` }));
+        return;
+      }
+    }
+  }
+  const next = llmConfig.setConfig(payload);
+  res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify(next));
+}
+
 async function handleAnalyze(req, res) {
   const ctype = (req.headers['content-type'] || '').toLowerCase();
   if (ctype.startsWith('application/pdf') || ctype.startsWith('application/octet-stream')) {
@@ -326,6 +454,31 @@ async function handleAnalyze(req, res) {
   }
   res.writeHead(415, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ error: 'unsupported content-type' }));
+}
+
+async function handleAuthStatusGet(req, res) {
+  try {
+    const s = await authStatus.checkAll();
+    llmConfig.applyAvailability(s);
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify(s));
+  } catch (err) {
+    res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ error: err.message }));
+  }
+}
+
+async function handleAuthStatusRefresh(req, res) {
+  try {
+    authStatus.invalidateCache();
+    const s = await authStatus.checkAll(true);
+    llmConfig.applyAvailability(s);
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify(s));
+  } catch (err) {
+    res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ error: err.message }));
+  }
 }
 
 async function handleClaudeStatus(req, res) {
@@ -366,7 +519,13 @@ async function handleClaudeLogin(req, res) {
 }
 
 async function handleStatic(req, res) {
-  const entry = STATIC[req.url];
+  let pathname = '/';
+  try {
+    pathname = new URL(req.url || '/', 'http://127.0.0.1').pathname;
+  } catch {
+    pathname = req.url || '/';
+  }
+  const entry = STATIC[pathname];
   if (!entry) {
     res.writeHead(404);
     res.end('Not Found');
@@ -394,6 +553,16 @@ function createAppServer() {
       handlePromptsDefaultsGet(req, res);
     } else if (req.method === 'PUT' && req.url === '/api/prompts') {
       handlePromptsPut(req, res);
+    } else if (req.method === 'GET' && req.url === '/api/llm-config') {
+      handleLlmConfigGet(req, res);
+    } else if (req.method === 'GET' && req.url === '/api/llm-config/defaults') {
+      handleLlmConfigDefaultsGet(req, res);
+    } else if (req.method === 'PUT' && req.url === '/api/llm-config') {
+      handleLlmConfigPut(req, res);
+    } else if (req.method === 'GET' && req.url === '/api/auth-status') {
+      handleAuthStatusGet(req, res);
+    } else if (req.method === 'POST' && req.url === '/api/auth-status/refresh') {
+      handleAuthStatusRefresh(req, res);
     } else if (req.method === 'GET' && req.url === '/api/claude-status') {
       handleClaudeStatus(req, res);
     } else if (req.method === 'POST' && req.url === '/api/claude-login') {

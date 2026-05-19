@@ -1,6 +1,6 @@
 // agents/orchestrator.js
 // 오케스트레이터 에이전트: 사용자의 emphasis를 해석해 다른 에이전트들을 위한 directive 생성.
-import { callClaudeJson } from '../core/claudeClient.js';
+import { callLLMJson } from '../core/llm.js';
 import { fillTemplate } from '../core/promptStore.js';
 
 const SCHEMA = `{
@@ -21,7 +21,7 @@ export const EMPTY_DIRECTIVE = {
   additionalReportSections: [],
 };
 
-export async function run({ title, abstract, emphasis, prompts, onMeta }) {
+export async function run({ title, abstract, emphasis, prompts, llm = {}, onMeta }) {
   if (!emphasis || !emphasis.trim()) return EMPTY_DIRECTIVE;
   const filled = fillTemplate(prompts.orchestrator, {
     title: title ?? '',
@@ -29,8 +29,11 @@ export async function run({ title, abstract, emphasis, prompts, onMeta }) {
     emphasis: emphasis.trim(),
   });
   let meta;
-  const raw = await callClaudeJson(filled, SCHEMA, {
+  const raw = await callLLMJson(filled, SCHEMA, {
     timeoutMs: 300_000,
+    backend: llm.backend,
+    model: llm.model,
+    reasoningEffort: llm.reasoningEffort,
     onMeta: m => { meta = m; },
   });
   if (onMeta && meta) onMeta(meta);

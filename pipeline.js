@@ -9,9 +9,17 @@ import { run as runWriter } from './agents/writer.js';
 import { run as runOrchestrator, EMPTY_DIRECTIVE } from './agents/orchestrator.js';
 import { run as runFocusedAudit } from './agents/focusedAudit.js';
 import { getCurrent as getPrompts } from './core/promptStore.js';
+import { getConfig as getLlmConfig } from './core/llmConfig.js';
 import { writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+
+function backendTag(m) {
+  if (!m || !m.backend) return '';
+  const model = m.model ? `/${m.model}` : '';
+  const effort = m.reasoningEffort ? `/${m.reasoningEffort}` : '';
+  return ` · [${m.backend}${model}${effort}]`;
+}
 
 function countStatuses(verifiedClaims) {
   const stats = { supported: 0, partially_supported: 0, unsupported: 0, contradicted: 0 };
@@ -24,6 +32,7 @@ function countStatuses(verifiedClaims) {
 export async function runPipeline(pdfPath, onProgress = () => {}, options = {}) {
   const sessionId = randomUUID();
   const prompts = options.prompts ?? await getPrompts();
+  const llmConfig = getLlmConfig();
   const emphasis = options.emphasis ?? '';
 
   const metrics = { parse: {}, analyst: {}, verifier: {}, writer: {} };
@@ -54,6 +63,7 @@ export async function runPipeline(pdfPath, onProgress = () => {}, options = {}) 
         abstract: paperText.slice(0, 4000),
         emphasis,
         prompts,
+        llm: llmConfig.orchestrator,
         onMeta: m => { metrics.orchestrator = { ...m }; },
       });
     } catch (err) {
@@ -84,12 +94,13 @@ export async function runPipeline(pdfPath, onProgress = () => {}, options = {}) 
     prompts,
     emphasis,
     extractionFocus: directive.extractionFocus,
+    llm: llmConfig.analyst,
     onMeta: m => { metrics.analyst = { ...m }; },
   });
   metrics.analyst.durationMs = Date.now() - tA;
   onProgress({
     stage: 'analyst',
-    message: `  - claim ${analystOut.claims?.length ?? 0}개 · ${Math.round(metrics.analyst.durationMs / 1000)}s · in ${metrics.analyst.usage?.input_tokens || 0} / out ${metrics.analyst.usage?.output_tokens || 0} 토큰`,
+    message: `  - claim ${analystOut.claims?.length ?? 0}개 · ${Math.round(metrics.analyst.durationMs / 1000)}s · in ${metrics.analyst.usage?.input_tokens || 0} / out ${metrics.analyst.usage?.output_tokens || 0} 토큰${backendTag(metrics.analyst)}`,
     meta: metrics.analyst,
   });
   onProgress({ stage: 'verifier', message: `${stageLabel('verifier')} 검증가: claim별 retrieval + 배치 검증 (focus: ${directive.verificationFocus || '없음'})` });
@@ -99,13 +110,14 @@ export async function runPipeline(pdfPath, onProgress = () => {}, options = {}) 
     prompts,
     claims: analystOut.claims ?? [],
     verificationFocus: directive.verificationFocus,
+    llm: llmConfig.verifier,
     onMeta: m => { metrics.verifier = { ...m }; },
   });
   metrics.verifier.durationMs = Date.now() - tV;
   const stats = countStatuses(verifiedClaims);
   onProgress({
     stage: 'verifier',
-    message: `  - supported ${stats.supported} · partial ${stats.partially_supported} · unsupported ${stats.unsupported} · contradicted ${stats.contradicted} · ${metrics.verifier.calls || 0}회 호출 · ${Math.round(metrics.verifier.durationMs / 1000)}s · in ${metrics.verifier.totalInputTokens || 0} / out ${metrics.verifier.totalOutputTokens || 0} 토큰`,
+    message: `  - supported ${stats.supported} · partial ${stats.partially_supported} · unsupported ${stats.unsupported} · contradicted ${stats.contradicted} · ${metrics.verifier.calls || 0}회 호출 · ${Math.round(metrics.verifier.durationMs / 1000)}s · in ${metrics.verifier.totalInputTokens || 0} / out ${metrics.verifier.totalOutputTokens || 0} 토큰${backendTag(metrics.verifier)}`,
     meta: metrics.verifier,
   });
 
@@ -115,7 +127,7 @@ export async function runPipeline(pdfPath, onProgress = () => {}, options = {}) 
     onProgress({ stage: 'audits', message: `${stageLabel('audits')} 감사 ${directive.additionalAuditTasks.length}건 병렬 실행 중...` });
     const tAudit = Date.now();
     const settled = await Promise.allSettled(
-      directive.additionalAuditTasks.map(task => runFocusedAudit({ paperText, task }))
+      directive.additionalAuditTasks.map(task => runFocusedAudit({ paperText, task, llm: llmConfig.audit }))
     );
     auditResults = settled.map((r, i) => r.status === 'fulfilled' ? r.value : {
       taskId: directive.additionalAuditTasks[i].id,
@@ -139,12 +151,13 @@ export async function runPipeline(pdfPath, onProgress = () => {}, options = {}) 
     auditResults,
     reportSectionsToEmphasize: directive.reportSectionsToEmphasize,
     additionalReportSections: directive.additionalReportSections,
+    llm: llmConfig.writer,
     onMeta: m => { metrics.writer = { ...m }; },
   });
   metrics.writer.durationMs = Date.now() - tW;
   onProgress({
     stage: 'writer',
-    message: `  - 리포트 ${report.length}자 · ${Math.round(metrics.writer.durationMs / 1000)}s · in ${metrics.writer.usage?.input_tokens || 0} / out ${metrics.writer.usage?.output_tokens || 0} 토큰`,
+    message: `  - 리포트 ${report.length}자 · ${Math.round(metrics.writer.durationMs / 1000)}s · in ${metrics.writer.usage?.input_tokens || 0} / out ${metrics.writer.usage?.output_tokens || 0} 토큰${backendTag(metrics.writer)}`,
     meta: metrics.writer,
   });
 

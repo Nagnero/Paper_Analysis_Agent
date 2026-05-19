@@ -9,13 +9,19 @@
 <body>
   <header class="top">
     <div class="top-inner">
-      <div class="brand">Korean Paper Agent Console <span class="ver">v0.2</span></div>
+      <div class="brand">Korean Paper Agent Console <span class="ver">v0.2.0</span></div>
       <div class="top-actions">
         <button type="button" id="openSettingsBtn" class="btn-ghost">⚙ 설정</button>
         <button type="button" id="newAnalysisBtn" class="btn-ghost">새 분석</button>
       </div>
     </div>
   </header>
+
+  <div id="authBanner" class="auth-banner" hidden>
+    <span class="auth-banner-text"></span>
+    <button type="button" id="authBannerRefreshBtn" class="btn-secondary">다시 확인</button>
+    <button type="button" id="authBannerHelpBtn" class="btn-secondary">로그인 방법</button>
+  </div>
 
   <main class="chat-main">
     <div id="messages" class="messages" aria-live="polite"></div>
@@ -27,20 +33,20 @@
 
   <footer class="composer">
     <div class="composer-inner">
-      <div class="persona-row" role="radiogroup" aria-label="페르소나 선택">
-        <label class="seg"><input type="radio" name="persona" value="neutral" checked><span>중립</span></label>
-        <label class="seg"><input type="radio" name="persona" value="adversarial"><span>적대적 리뷰어</span></label>
-        <span id="composerHint" class="hint"></span>
-      </div>
+      <div class="hint-row"><span id="composerHint" class="hint"></span></div>
+      <button type="button" id="attachZone" class="attach-zone">
+        <span class="attach-zone-icon" aria-hidden="true">📄</span>
+        <span class="attach-zone-title">PDF 첨부하여 분석 시작</span>
+        <span class="attach-zone-sub">클릭하여 선택하거나 파일을 끌어다 놓으세요</span>
+      </button>
       <div id="attachmentChip" class="attach-chip" hidden>
         <span class="chip-icon">📄</span>
         <span id="attachName" class="chip-name"></span>
         <span id="attachSize" class="chip-size"></span>
         <button type="button" id="attachClear" class="chip-x" aria-label="첨부 제거">×</button>
       </div>
-      <div class="composer-row">
-        <textarea id="composerInput" class="composer-input" rows="1" placeholder="메시지 또는 PDF 첨부 후 강조 사항..."></textarea>
-        <button type="button" id="attachBtn" class="icon-btn" title="PDF 첨부">📎</button>
+      <div id="composerRow" class="composer-row">
+        <textarea id="composerInput" class="composer-input" rows="1" placeholder="후속 질문을 입력하세요..."></textarea>
         <button type="button" id="sendBtn" class="send-btn" title="보내기" disabled>↑</button>
         <input id="fileInput" type="file" accept="application/pdf,.pdf" hidden>
       </div>
@@ -55,27 +61,77 @@
         <button type="button" class="modal-close" data-close aria-label="닫기">×</button>
       </div>
       <div class="modal-tabs">
-        <button type="button" class="tab active" data-tab="analyst">분석가</button>
-        <button type="button" class="tab" data-tab="verifier">검증가</button>
-        <button type="button" class="tab" data-tab="writer">작가</button>
-        <button type="button" class="tab" data-tab="orchestrator">오케스트레이터</button>
+        <button type="button" class="tab active" data-tab="orchestrator">오케스트레이터</button>
+        <button type="button" class="tab" data-tab="team">분석팀</button>
+        <button type="button" class="tab" data-tab="llm">모델</button>
       </div>
       <div class="modal-body">
-        <div class="tab-pane active" data-pane="analyst">
-          <textarea id="promptAnalyst" spellcheck="false"></textarea>
-          <button type="button" class="btn-ghost small" data-reset="analyst">기본값으로 채우기 (저장 필요)</button>
-        </div>
-        <div class="tab-pane" data-pane="verifier">
-          <textarea id="promptVerifier" spellcheck="false"></textarea>
-          <button type="button" class="btn-ghost small" data-reset="verifier">기본값으로 채우기 (저장 필요)</button>
-        </div>
-        <div class="tab-pane" data-pane="writer">
-          <textarea id="promptWriter" spellcheck="false"></textarea>
-          <button type="button" class="btn-ghost small" data-reset="writer">기본값으로 채우기 (저장 필요)</button>
-        </div>
-        <div class="tab-pane" data-pane="orchestrator">
+        <div class="tab-pane active" data-pane="orchestrator">
           <textarea id="promptOrchestrator" spellcheck="false"></textarea>
           <button type="button" class="btn-ghost small" data-reset="orchestrator">기본값으로 채우기 (저장 필요)</button>
+        </div>
+        <div class="tab-pane" data-pane="team">
+          <p class="llm-hint">분석팀은 3단계로 동작합니다: 분석가가 claim을 추출 → 검증가가 원문 근거 확인 → 작가가 한국어 리포트 작성.</p>
+          <details class="team-agent" open>
+            <summary>분석가 — claim과 재현가능성 정보 추출 (JSON)</summary>
+            <div class="team-agent-body">
+              <textarea id="promptAnalyst" spellcheck="false"></textarea>
+              <div class="team-agent-foot">
+                <button type="button" class="btn-ghost small" data-reset="analyst">기본값으로 채우기 (저장 필요)</button>
+              </div>
+            </div>
+          </details>
+          <details class="team-agent">
+            <summary>검증가 — claim별 원문 근거 검색 (JSON)</summary>
+            <div class="team-agent-body">
+              <textarea id="promptVerifier" spellcheck="false"></textarea>
+              <div class="team-agent-foot">
+                <button type="button" class="btn-ghost small" data-reset="verifier">기본값으로 채우기 (저장 필요)</button>
+              </div>
+            </div>
+          </details>
+          <details class="team-agent">
+            <summary>작가 — 한국어 리포트 작성 (Markdown)</summary>
+            <div class="team-agent-body">
+              <textarea id="promptWriter" spellcheck="false"></textarea>
+              <div class="team-agent-foot">
+                <button type="button" class="btn-ghost small" data-reset="writer">기본값으로 채우기 (저장 필요)</button>
+              </div>
+            </div>
+          </details>
+        </div>
+        <div class="tab-pane" data-pane="llm">
+          <p class="llm-hint">각 에이전트별로 백엔드(Claude / Codex)를 지정합니다. Claude는 모델을 고르고, Codex는 GPT-5.5 고정 상태에서 추론 강도만 고릅니다.<br>채팅: 분석 후 사용자가 같은 논문에 대해 질문할 때 사용.</p>
+          <div class="llm-row" data-role="orchestrator">
+            <label>오케스트레이터</label>
+            <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
+            <select class="llm-model"></select>
+          </div>
+          <div class="llm-row" data-role="analyst">
+            <label>분석가</label>
+            <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
+            <select class="llm-model"></select>
+          </div>
+          <div class="llm-row" data-role="verifier">
+            <label>검증가</label>
+            <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
+            <select class="llm-model"></select>
+          </div>
+          <div class="llm-row" data-role="writer">
+            <label>작가</label>
+            <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
+            <select class="llm-model"></select>
+          </div>
+          <div class="llm-row" data-role="chat">
+            <label>채팅</label>
+            <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
+            <select class="llm-model"></select>
+          </div>
+          <div class="llm-foot">
+            <button type="button" id="resetLlmBtn" class="btn-ghost small">모든 값을 기본값으로</button>
+            <button type="button" id="saveLlmBtn" class="primary">저장</button>
+            <span id="llmStatus" class="hint"></span>
+          </div>
         </div>
       </div>
       <div class="modal-foot">
@@ -83,6 +139,37 @@
         <span id="promptsStatus" class="hint"></span>
         <span class="spacer"></span>
         <button type="button" class="btn-ghost" data-close>닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="authBlocker" class="auth-blocker" hidden>
+    <div class="auth-blocker-card">
+      <h2>로그인 필요</h2>
+      <p>Claude Code와 OpenAI Codex 둘 다 로그아웃 상태입니다. <strong>둘 중 최소 하나</strong>에 로그인해야 앱을 사용할 수 있습니다.</p>
+
+      <section class="auth-method">
+        <h3>Claude Code 로그인</h3>
+        <ol>
+          <li>터미널을 열고 <code>claude</code> 입력 후 Enter</li>
+          <li>안내에 따라 브라우저에서 로그인</li>
+          <li>아래 "상태 다시 확인" 클릭</li>
+        </ol>
+      </section>
+
+      <section class="auth-method">
+        <h3>OpenAI Codex 로그인</h3>
+        <ol>
+          <li>터미널에서 <code>codex login</code> 입력 후 Enter</li>
+          <li>안내에 따라 인증 완료</li>
+          <li>아래 "상태 다시 확인" 클릭</li>
+        </ol>
+      </section>
+
+      <div class="auth-blocker-foot">
+        <button type="button" id="authBlockerRefreshBtn">상태 다시 확인</button>
+        <button type="button" id="authBlockerCloseBtn" class="btn-secondary">닫기</button>
+        <span id="authBlockerStatus" class="hint"></span>
       </div>
     </div>
   </div>

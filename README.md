@@ -1,4 +1,4 @@
-# Veridict · v0.1.0
+# PAA (Paper Analysis Agent) · v0.2.0
 
 영어 논문 PDF 한 편을 입력하면 4개의 LLM 에이전트(orchestrator → analyst → verifier → writer)가 협업해 **각 주장(claim)에 원문 근거가 매핑된 한국어 분석 리포트**를 생성하는 Electron 데스크탑 앱입니다.
 
@@ -55,7 +55,7 @@
 - **Claim 별 원문 근거 매핑** — 모든 주장에 `supported / partially_supported / unsupported / contradicted` 라벨 + 원문 발췌 + 섹션·페이지 인용
 - **청크 분할 + BM25 retrieval** — 긴 논문도 claim 별 관련 구간만 LLM 에 전달
 - **프롬프트 런타임 편집** — `prompts/*.md` 4 종을 앱 안에서 바로 수정 (`⚙ 설정`)
-- **페르소나 후속 채팅** — 분석 끝난 세션에 "중립" / "적대적 리뷰어" 모드로 질문
+- **분석 후 후속 채팅** — 분석 끝난 세션에 논문·리포트 컨텍스트 기반으로 자유 질문
 - **로컬 only** — PDF / 자격증명 / 분석 결과 모두 사용자 PC 에만. 외부 업로드 0.
 
 ## 요구사항
@@ -67,15 +67,15 @@
 | **Claude Code CLI** | https://claude.com/code — 사전 설치 + `claude` 한 번 실행해 본인 계정 로그인 필요 |
 | **구독** | Claude Pro 또는 Max (사용자 본인 계정) |
 
-> Veridict 는 어떤 API 키도 저장하거나 요구하지 않습니다. 인증은 전적으로 사용자의 `claude` CLI 가 관리합니다.
+> PAA 는 어떤 API 키도 저장하거나 요구하지 않습니다. 인증은 전적으로 사용자의 `claude` CLI 가 관리합니다.
 
 ## Quick start
 
 ### 옵션 A — 소스에서 실행 (가장 빠름)
 
 ```bash
-git clone https://github.com/evejaeyong/Paper_Analysis_Agent.git veridict
-cd veridict
+git clone https://github.com/evejaeyong/Paper_Analysis_Agent.git paa
+cd paa
 npm install
 npm start              # Electron 데스크탑 앱 가동
 ```
@@ -93,7 +93,7 @@ CLI 가 없거나 미로그인이면 안내 화면이 뜹니다. 거기서 `clau
 # Windows Developer Mode 켜야 함 (Settings → Privacy & Security → For developers)
 $env:CSC_IDENTITY_AUTO_DISCOVERY = "false"
 npm run dist:win
-# → dist\Veridict Setup 0.1.0.exe (약 106 MB)
+# → dist\PAA Setup 0.2.0.exe (약 106 MB)
 ```
 
 생성된 인스톨러는 다른 PC 로 배포 가능. 받는 사람도 **Claude Code CLI 사전 설치 + 본인 로그인** 은 필요합니다.
@@ -172,7 +172,7 @@ npm start
 ## 디렉토리 구조
 
 ```
-veridict/
+paa/
 ├── electron-main.mjs    # Electron 진입점 + claude CLI 프로브
 ├── server.js            # HTTP / SSE 서버
 ├── pipeline.js          # 4-단계 파이프라인 오케스트레이션

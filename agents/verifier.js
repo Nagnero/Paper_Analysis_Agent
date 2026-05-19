@@ -2,7 +2,7 @@
 // 검증가 에이전트: 청크 + BM25 retrieval + 배치 병렬 LLM 호출로 각 claim의 원문 근거 확인.
 import { BM25Index } from '../utils/bm25.js';
 import { chunk } from '../utils/chunker.js';
-import { callClaudeJson } from '../core/claudeClient.js';
+import { callLLMJson } from '../core/llm.js';
 import { fillTemplate } from '../core/promptStore.js';
 
 const SCHEMA_HINT = `[{"claimId": "string", "status": "supported|partially_supported|unsupported|contradicted", "evidenceQuote": "string", "evidenceSection": "string", "confidence": 0.0, "note": "string|null"}]`;
@@ -11,7 +11,7 @@ const BATCH_SIZE = 5;
 const CONCURRENCY = 2;
 const TOP_K = 3;
 
-export async function run({ paperText, prompts, claims, verificationFocus, onMeta }) {
+export async function run({ paperText, prompts, claims, verificationFocus, llm = {}, onMeta }) {
   const chunks = chunk(paperText);
   const idx = new BM25Index();
   for (const c of chunks) idx.add(c.id, c.text);
@@ -30,7 +30,7 @@ export async function run({ paperText, prompts, claims, verificationFocus, onMet
 
   for (let i = 0; i < batches.length; i += CONCURRENCY) {
     const slice = batches.slice(i, i + CONCURRENCY);
-    const settled = await Promise.allSettled(slice.map(batch => verifyBatch(batch, chunks, idx, prompts, focusBlock)));
+    const settled = await Promise.allSettled(slice.map(batch => verifyBatch(batch, chunks, idx, prompts, focusBlock, llm)));
     for (let j = 0; j < settled.length; j++) {
       const res = settled[j];
       const originalBatch = slice[j];
@@ -55,6 +55,9 @@ export async function run({ paperText, prompts, claims, verificationFocus, onMet
 
   if (onMeta) {
     onMeta({
+      backend: allMetas[0]?.backend,
+      model: allMetas[0]?.model,
+      reasoningEffort: allMetas[0]?.reasoningEffort,
       calls: allMetas.length,
       totalInputTokens: allMetas.reduce((s, m) => s + (m.usage?.input_tokens || 0), 0),
       totalOutputTokens: allMetas.reduce((s, m) => s + (m.usage?.output_tokens || 0), 0),
@@ -85,7 +88,7 @@ export async function run({ paperText, prompts, claims, verificationFocus, onMet
   });
 }
 
-async function verifyBatch(batch, chunks, idx, prompts, focusBlock) {
+async function verifyBatch(batch, chunks, idx, prompts, focusBlock, llm = {}) {
   const chunkIdSet = new Set();
   for (const c of batch) {
     const hits = idx.search(c.text, TOP_K);
@@ -103,8 +106,11 @@ async function verifyBatch(batch, chunks, idx, prompts, focusBlock) {
   });
 
   let meta;
-  let verdicts = await callClaudeJson(filled, SCHEMA_HINT, {
+  let verdicts = await callLLMJson(filled, SCHEMA_HINT, {
     timeoutMs: 600_000,
+    backend: llm.backend,
+    model: llm.model,
+    reasoningEffort: llm.reasoningEffort,
     onMeta: m => { meta = m; },
   });
   if (!Array.isArray(verdicts)) {

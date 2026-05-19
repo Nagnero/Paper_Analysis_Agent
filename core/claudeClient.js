@@ -14,10 +14,18 @@ import path from 'node:path';
 // native installer( ~/.local/bin/claude.exe )와 npm global( claude.cmd ) 양쪽 호환.
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
 
+function safeModel(model) {
+  if (!model) return '';
+  if (!/^[\w\-.:\/]+$/.test(model)) {
+    throw new Error(`모델 ID에 허용되지 않은 문자: ${model}`);
+  }
+  return model;
+}
+
 /**
  * Claude CLI 호출. JSON 응답에서 result 필드의 텍스트를 반환.
  * @param {string} prompt
- * @param {{ systemPrompt?: string, timeoutMs?: number, sessionId?: string, resume?: string, onMeta?: (meta: {usage?: object, durationMs: number, sessionIdFromResponse?: string}) => void }} opts
+ * @param {{ systemPrompt?: string, timeoutMs?: number, sessionId?: string, resume?: string, model?: string, onMeta?: (meta: {usage?: object, durationMs: number, sessionIdFromResponse?: string}) => void }} opts
  * @returns {Promise<string>}
  */
 export async function callClaude(prompt, opts = {}) {
@@ -35,6 +43,10 @@ export async function callClaude(prompt, opts = {}) {
     }
     if (opts.sessionId) cmdParts.push('--session-id', opts.sessionId);
     if (opts.resume) cmdParts.push('--resume', opts.resume);
+    if (opts.model) {
+      const m = safeModel(opts.model);
+      if (m) cmdParts.push('--model', m);
+    }
     const command = `${cmdParts.join(' ')} < "${promptFile}"`;
 
     const startedAt = Date.now();
@@ -72,6 +84,8 @@ export async function callClaude(prompt, opts = {}) {
         if (opts.onMeta) {
           try {
             opts.onMeta({
+              backend: 'claude',
+              model: opts.model || '',
               usage: json.usage,
               durationMs: Date.now() - startedAt,
               sessionIdFromResponse: json.session_id,
@@ -138,7 +152,7 @@ export async function checkAuthStatus() {
  * JSON 응답을 강제. 1회 재시도.
  * @param {string} prompt
  * @param {string} schemaHint
- * @param {{ systemPrompt?: string, timeoutMs?: number, sessionId?: string, resume?: string, onMeta?: (meta: {usage?: object, durationMs: number, sessionIdFromResponse?: string}) => void }} [opts]
+ * @param {{ systemPrompt?: string, timeoutMs?: number, sessionId?: string, resume?: string, model?: string, onMeta?: (meta: {usage?: object, durationMs: number, sessionIdFromResponse?: string}) => void }} [opts]
  */
 export async function callClaudeJson(prompt, schemaHint, opts = {}) {
   const fullPrompt = `${prompt}\n\n반드시 다음 JSON 스키마에 맞게만 응답하세요. JSON 외 다른 텍스트는 절대 포함하지 마세요.\n\`\`\`json\n${schemaHint}\n\`\`\``;

@@ -2,13 +2,13 @@
 // ad-hoc 감사 작업 에이전트: 오케스트레이터가 지시한 한 가지 검토 작업을 실행.
 import { BM25Index } from '../utils/bm25.js';
 import { chunk } from '../utils/chunker.js';
-import { callClaudeJson } from '../core/claudeClient.js';
+import { callLLMJson } from '../core/llm.js';
 
 const TOP_K = 5;
 
 const SCHEMA = `{ "taskId": "string", "name": "string", "findings": ["string"], "verdict": "string", "notes": "string" }`;
 
-export async function run({ paperText, task, onMeta }) {
+export async function run({ paperText, task, llm = {}, onMeta }) {
   const chunks = chunk(paperText);
   const idx = new BM25Index();
   for (const c of chunks) idx.add(c.id, c.text);
@@ -41,8 +41,11 @@ export async function run({ paperText, task, onMeta }) {
 ${contextText}`;
 
   let meta;
-  const raw = await callClaudeJson(prompt, SCHEMA, {
+  const raw = await callLLMJson(prompt, SCHEMA, {
     timeoutMs: 300_000,
+    backend: llm.backend,
+    model: llm.model,
+    reasoningEffort: llm.reasoningEffort,
     onMeta: m => { meta = m; },
   });
   if (onMeta && meta) onMeta(meta);

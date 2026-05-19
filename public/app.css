@@ -380,35 +380,41 @@ button { font-family: inherit; }
   max-width: 880px;
   margin: 0 auto;
 }
-.persona-row {
-  display: flex;
-  gap: 8px;
+.hint-row {
   margin-bottom: 8px;
-  align-items: center;
+  min-height: 16px;
 }
-.persona-row .hint {
-  margin-left: auto;
+.hint {
   font-size: 12px;
   color: var(--muted);
 }
-.persona-row .hint.error { color: var(--error); }
-.seg {
-  display: inline-flex;
+.hint.error { color: var(--error); }
+
+.attach-zone {
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 5px;
-  padding: 4px 10px;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 32px 24px;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  font-size: 12px;
+  border: 1.5px dashed var(--border);
+  border-radius: 14px;
+  color: var(--muted);
   cursor: pointer;
-  user-select: none;
+  font-family: inherit;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
 }
-.seg input { margin: 0; cursor: pointer; }
-.seg:has(input:checked) {
+.attach-zone:hover {
   border-color: var(--accent);
   background: var(--surface-2);
+  color: var(--text);
 }
+.attach-zone[hidden] { display: none; }
+.attach-zone-icon { font-size: 28px; line-height: 1; }
+.attach-zone-title { font-size: 14px; font-weight: 500; }
+.attach-zone-sub { font-size: 12px; color: var(--muted); }
 
 .attach-chip {
   display: inline-flex;
@@ -422,6 +428,7 @@ button { font-family: inherit; }
   max-width: 100%;
   font-size: 12.5px;
 }
+.attach-chip[hidden] { display: none; }
 .attach-chip .chip-name {
   max-width: 380px;
   white-space: nowrap;
@@ -449,6 +456,7 @@ button { font-family: inherit; }
   border-radius: 12px;
   padding: 8px 10px;
 }
+.composer-row[hidden] { display: none; }
 .composer-row:focus-within {
   border-color: var(--accent);
 }
@@ -466,15 +474,6 @@ button { font-family: inherit; }
   line-height: 1.45;
   resize: none;
 }
-.icon-btn {
-  background: transparent;
-  color: var(--muted);
-  border: none;
-  cursor: pointer;
-  font-size: 18px;
-  padding: 4px 6px;
-}
-.icon-btn:hover { color: var(--text); }
 .send-btn {
   background: var(--accent);
   color: white;
@@ -609,6 +608,89 @@ button { font-family: inherit; }
 }
 .tab-pane textarea:focus { border-color: var(--accent); }
 .tab-pane .btn-ghost { margin-top: 8px; }
+
+.llm-hint {
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.llm-hint code {
+  background: #11131a;
+  border: 1px solid var(--border);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--text);
+}
+.llm-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.llm-row label {
+  flex: 0 0 100px;
+  font-size: 13px;
+  color: var(--text);
+}
+.llm-row select {
+  background: #11131a;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-family: inherit;
+  font-size: 12.5px;
+  outline: none;
+}
+.llm-row select.llm-backend { flex: 0 0 110px; }
+.llm-row select.llm-model { flex: 1; min-width: 0; }
+.llm-row select:focus { border-color: var(--accent); }
+.llm-row.has-conflict select.llm-backend { border-color: var(--error); background: rgba(255, 80, 80, 0.08); }
+
+.team-agent {
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.team-agent summary {
+  cursor: pointer;
+  padding: 10px 14px;
+  font-weight: 600;
+  color: var(--text);
+  user-select: none;
+}
+.team-agent summary:hover { background: var(--surface-2); }
+.team-agent[open] summary { border-bottom: 1px solid var(--border); }
+.team-agent-body { padding: 12px 14px; }
+.team-agent-body textarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 280px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 13px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px;
+}
+.team-agent-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+.llm-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
 .modal-foot {
   display: flex;
   align-items: center;
@@ -639,3 +721,55 @@ button { font-family: inherit; }
 }
 .hint.visible { opacity: 1; }
 .hint.error { color: var(--error); }
+
+/* 부분 사용 모드 배너 */
+.auth-banner {
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 16px; background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  color: var(--text); font-size: 13px;
+}
+.auth-banner[hidden] { display: none; }
+.auth-banner-text { flex: 1; }
+.auth-banner[data-severity="warning"] { background: #3a2b18; color: #ffd28a; }
+.auth-banner[data-severity="error"] { background: #3a1818; color: #ff9a9a; }
+.btn-secondary {
+  background: transparent;
+  color: inherit;
+  border: 1px solid var(--border);
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.btn-secondary:hover { background: rgba(255,255,255,0.05); }
+
+/* 풀-스크린 차단 오버레이 */
+.auth-blocker {
+  position: fixed; inset: 0; z-index: 9999;
+  background: rgba(0,0,0,0.85);
+  display: flex; align-items: center; justify-content: center;
+}
+.auth-blocker[hidden] { display: none; }
+.auth-blocker-card {
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: 10px;
+  padding: 28px 32px; max-width: 720px; width: 90%;
+  max-height: 90vh; overflow-y: auto;
+}
+.auth-blocker-card h2 { margin-top: 0; }
+.auth-method { margin: 20px 0; padding: 16px;
+  border-left: 3px solid var(--accent);
+  background: var(--surface-2); border-radius: 4px; }
+.auth-method h3 { margin-top: 0; }
+.auth-method code { background: var(--bg); padding: 2px 6px; border-radius: 3px; }
+.auth-blocker-foot { display: flex; align-items: center; gap: 12px; margin-top: 24px; }
+.auth-blocker-foot button {
+  background: var(--accent); color: white; border: none;
+  padding: 7px 16px; border-radius: 6px; font-size: 13px; cursor: pointer;
+  font-family: inherit;
+}
+.auth-blocker-foot button.btn-secondary {
+  background: transparent; color: var(--text); border: 1px solid var(--border);
+}

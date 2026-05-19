@@ -142,10 +142,11 @@ export function renderMarkdown(src) {
 const state = {
   sessionId: null,
   pendingPdf: null,
-  persona: 'neutral',
   busy: false,
   messages: [],
 };
+
+let authStatus = null;
 
 const MAX_BYTES = 50 * 1024 * 1024;
 const STATUS_LABEL = {
@@ -161,7 +162,8 @@ const $ = (id) => document.getElementById(id);
 const messagesEl = $('messages');
 const composerInput = $('composerInput');
 const sendBtn = $('sendBtn');
-const attachBtn = $('attachBtn');
+const attachZone = $('attachZone');
+const composerRow = $('composerRow');
 const fileInput = $('fileInput');
 const attachmentChip = $('attachmentChip');
 const attachName = $('attachName');
@@ -179,6 +181,61 @@ const promptVerifier = $('promptVerifier');
 const promptWriter = $('promptWriter');
 const promptOrchestrator = $('promptOrchestrator');
 const PROMPT_FIELDS = { analyst: promptAnalyst, verifier: promptVerifier, writer: promptWriter, orchestrator: promptOrchestrator };
+const LLM_ROLES = ['orchestrator', 'analyst', 'verifier', 'writer', 'chat'];
+const saveLlmBtn = $('saveLlmBtn');
+const resetLlmBtn = $('resetLlmBtn');
+const llmStatus = $('llmStatus');
+const authBanner = $('authBanner');
+const authBannerText = authBanner ? authBanner.querySelector('.auth-banner-text') : null;
+const authBannerRefreshBtn = $('authBannerRefreshBtn');
+const authBannerHelpBtn = $('authBannerHelpBtn');
+const authBlocker = $('authBlocker');
+const authBlockerRefreshBtn = $('authBlockerRefreshBtn');
+const authBlockerCloseBtn = $('authBlockerCloseBtn');
+const authBlockerStatus = $('authBlockerStatus');
+
+const CLAUDE_MODELS = [
+  { value: '', label: '기본값 (claude CLI 디폴트)' },
+  { value: 'claude-opus-4-7', label: 'Opus 4.7 (최고 성능)' },
+  { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6 (균형)' },
+  { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5 (빠름/저렴)' },
+];
+const CODEX_MODELS = [
+  { value: 'low', label: 'GPT-5.5 · low' },
+  { value: 'medium', label: 'GPT-5.5 · medium' },
+  { value: 'high', label: 'GPT-5.5 · high' },
+  { value: 'xhigh', label: 'GPT-5.5 · xhigh' },
+];
+const CODEX_MODEL = 'gpt-5.5';
+const DEFAULT_CODEX_REASONING_EFFORT = 'medium';
+
+function getModelsFor(backend) {
+  const list = backend === 'codex' ? CODEX_MODELS : CLAUDE_MODELS;
+  return list;
+}
+
+function populateModelSelect(selectEl, backend, currentModel, currentReasoningEffort = '') {
+  const options = getModelsFor(backend);
+  selectEl.innerHTML = '';
+  for (const opt of options) {
+    const el = document.createElement('option');
+    el.value = opt.value;
+    el.textContent = opt.label;
+    selectEl.appendChild(el);
+  }
+  const knownValues = options.map(o => o.value);
+  const currentValue = backend === 'codex'
+    ? (knownValues.includes(currentReasoningEffort) ? currentReasoningEffort : DEFAULT_CODEX_REASONING_EFFORT)
+    : currentModel;
+  if (knownValues.includes(currentValue)) {
+    selectEl.value = currentValue;
+  } else {
+    if (currentValue) {
+      console.warn(`모델 ${currentModel}이(가) 카탈로그에 없어 기본값으로 설정`);
+    }
+    selectEl.value = '';
+  }
+}
 
 // ---------------- 유틸 ----------------
 
@@ -540,6 +597,7 @@ function setAttachment(file) {
   attachSize.textContent = fmtBytes(file.size);
   attachmentChip.hidden = false;
   setComposerHint('');
+  updateComposerMode();
   updateSendState();
 }
 
@@ -547,7 +605,19 @@ function clearAttachment() {
   state.pendingPdf = null;
   attachmentChip.hidden = true;
   fileInput.value = '';
+  updateComposerMode();
   updateSendState();
+}
+
+function updateComposerMode() {
+  const hasPdf = !!state.pendingPdf;
+  const hasSession = !!state.sessionId;
+  const initial = !hasPdf && !hasSession && !state.busy;
+  attachZone.hidden = !initial;
+  composerRow.hidden = initial;
+  composerInput.placeholder = hasPdf
+    ? '강조하고 싶은 부분이 있다면 입력하세요 (선택)'
+    : '후속 질문을 입력하세요...';
 }
 
 function autoGrow() {
@@ -569,6 +639,7 @@ function updateSendState() {
     enabled = false;
   }
   sendBtn.disabled = !enabled;
+  updateComposerMode();
 }
 
 // ---------------- 분석 (SSE) ----------------
@@ -626,6 +697,9 @@ function handleSseEvent(payload, msgId) {
     msg.error = payload.message;
     renderMsg(msg);
     scrollToBottom();
+    if (typeof payload.message === 'string' && /로그인/.test(payload.message)) {
+      fetchAuthStatus(true);
+    }
     return;
   }
   if (payload.stage === 'done') {
@@ -640,6 +714,7 @@ function handleSseEvent(payload, msgId) {
     if (payload.sessionId) {
       msg.sessionId = payload.sessionId;
       state.sessionId = payload.sessionId;
+      updateComposerMode();
     }
     renderMsg(msg);
     scrollToBottom();
@@ -652,7 +727,7 @@ function handleSseEvent(payload, msgId) {
 
 // ---------------- 채팅 ----------------
 
-async function sendChat(question, persona) {
+async function sendChat(question) {
   const userMsg = addMessage({ id: uid(), role: 'user', kind: 'chat', text: question });
   const assistantMsg = addMessage({
     id: uid(), role: 'assistant', kind: 'chat', status: 'loading',
@@ -664,7 +739,7 @@ async function sendChat(question, persona) {
     const res = await fetch('/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId: state.sessionId, question, persona }),
+      body: JSON.stringify({ sessionId: state.sessionId, question }),
     });
     let json = null;
     try { json = await res.json(); } catch { /* ignore */ }
@@ -672,6 +747,7 @@ async function sendChat(question, persona) {
       updateMessage(assistantMsg.id, { status: 'done', text: json.answer });
     } else if (res.status === 410) {
       state.sessionId = null;
+      updateComposerMode();
       updateMessage(assistantMsg.id, {
         status: 'error',
         error: (json && json.error) || '세션이 만료됐어요. 새 분석을 시작하세요.',
@@ -680,6 +756,12 @@ async function sendChat(question, persona) {
       // 입력 복원
       composerInput.value = question;
       autoGrow();
+    } else if (res.status === 401) {
+      const m = (json && json.error) || '로그인이 필요합니다.';
+      updateMessage(assistantMsg.id, { status: 'error', error: m });
+      composerInput.value = question;
+      autoGrow();
+      fetchAuthStatus(true);
     } else {
       const m = (json && json.error) || `요청 실패 (${res.status})`;
       updateMessage(assistantMsg.id, { status: 'error', error: m });
@@ -738,7 +820,7 @@ async function onSend() {
 
   composerInput.value = '';
   autoGrow();
-  await sendChat(text, state.persona);
+  await sendChat(text);
 }
 
 // ---------------- 새 분석 / 설정 ----------------
@@ -790,11 +872,56 @@ function flashPromptsStatus(text, isError = false) {
   }, 2000);
 }
 
+let llmLoaded = false;
+function fillLlmRows(cfg) {
+  for (const role of LLM_ROLES) {
+    const row = settingsModal.querySelector(`.llm-row[data-role="${role}"]`);
+    if (!row) continue;
+    const backendEl = row.querySelector('.llm-backend');
+    const modelEl = row.querySelector('.llm-model');
+    const roleCfg = cfg[role] || { backend: 'claude', model: '', reasoningEffort: '' };
+    backendEl.value = ['claude', 'codex'].includes(roleCfg.backend) ? roleCfg.backend : 'claude';
+    populateModelSelect(modelEl, backendEl.value, roleCfg.model || '', roleCfg.reasoningEffort || '');
+  }
+}
+function bindLlmRowEvents() {
+  for (const row of settingsModal.querySelectorAll('.llm-row')) {
+    const backendEl = row.querySelector('.llm-backend');
+    const modelEl = row.querySelector('.llm-model');
+    if (backendEl.dataset.bound) continue;
+    backendEl.dataset.bound = '1';
+    backendEl.addEventListener('change', () => {
+      populateModelSelect(modelEl, backendEl.value, '', DEFAULT_CODEX_REASONING_EFFORT);
+    });
+  }
+}
+async function loadLlmIntoModal() {
+  if (llmLoaded) return;
+  const res = await fetch('/api/llm-config');
+  if (!res.ok) throw new Error(`서버 오류 (${res.status})`);
+  const json = await res.json();
+  fillLlmRows(json);
+  bindLlmRowEvents();
+  llmLoaded = true;
+  applyAuthStatus();
+}
+
+function flashLlmStatus(text, isError = false) {
+  llmStatus.textContent = text;
+  llmStatus.classList.toggle('error', !!isError);
+  llmStatus.classList.add('visible');
+  setTimeout(() => {
+    llmStatus.classList.remove('visible');
+    llmStatus.textContent = '';
+  }, 2000);
+}
+
 async function openSettings() {
   try {
     await loadPromptsIntoModal();
+    await loadLlmIntoModal();
   } catch (err) {
-    setComposerHint(`프롬프트 로딩 실패: ${err.message}`, true);
+    setComposerHint(`설정 로딩 실패: ${err.message}`, true);
     return;
   }
   settingsModal.hidden = false;
@@ -803,9 +930,69 @@ function closeSettings() {
   settingsModal.hidden = true;
 }
 
+// ---------------- 로그인 상태 ----------------
+
+async function fetchAuthStatus(force = false) {
+  try {
+    const res = force
+      ? await fetch('/api/auth-status/refresh', { method: 'POST' })
+      : await fetch('/api/auth-status');
+    if (!res.ok) return;
+    authStatus = await res.json();
+    applyAuthStatus();
+  } catch { /* ignore */ }
+}
+
+function applyAuthStatus() {
+  if (!authStatus) return;
+  const claudeOk = !!authStatus.claude?.loggedIn;
+  const codexOk = !!authStatus.codex?.loggedIn;
+
+  if (!claudeOk && !codexOk) {
+    if (authBlocker) authBlocker.hidden = false;
+    if (authBanner) authBanner.hidden = true;
+  } else if (claudeOk && codexOk) {
+    if (authBlocker) authBlocker.hidden = true;
+    if (authBanner) authBanner.hidden = true;
+  } else {
+    if (authBlocker) authBlocker.hidden = true;
+    if (authBanner) {
+      authBanner.hidden = false;
+      authBanner.dataset.severity = 'warning';
+      if (authBannerText) {
+        authBannerText.textContent = claudeOk
+          ? 'Codex 로그아웃 — Codex로 설정된 역할은 분석 실패합니다. 터미널에서 codex login 후 [다시 확인]'
+          : 'Claude 로그아웃 — Codex가 사용 가능해 기본값을 Codex/GPT-5.5로 전환했습니다. Claude를 쓰려면 터미널에서 claude 후 로그인하고 [다시 확인]';
+      }
+    }
+  }
+
+  // 모달 모델 탭의 backend 옵션 활성/비활성 토글.
+  // Claude가 없고 Codex가 있으면 서버 기본값과 맞춰 Codex/GPT-5.5로 전환한다.
+  for (const row of settingsModal.querySelectorAll('.llm-row')) {
+    const backendEl = row.querySelector('.llm-backend');
+    const modelEl = row.querySelector('.llm-model');
+    if (!backendEl) continue;
+    if (!claudeOk && codexOk && backendEl.value === 'claude') {
+      backendEl.value = 'codex';
+      if (modelEl) populateModelSelect(modelEl, 'codex', CODEX_MODEL, DEFAULT_CODEX_REASONING_EFFORT);
+    }
+    for (const opt of backendEl.options) {
+      const okMap = { claude: claudeOk, codex: codexOk };
+      const ok = okMap[opt.value];
+      const baseLabel = opt.dataset.baseLabel || opt.textContent.replace(/\s*\(로그아웃\)\s*$/, '');
+      opt.dataset.baseLabel = baseLabel;
+      opt.disabled = !ok;
+      opt.textContent = ok ? baseLabel : `${baseLabel} (로그아웃)`;
+    }
+    const selected = backendEl.selectedOptions[0];
+    row.classList.toggle('has-conflict', !!(selected && selected.disabled));
+  }
+}
+
 // ---------------- 이벤트 바인딩 ----------------
 
-attachBtn.addEventListener('click', () => fileInput.click());
+attachZone.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', () => {
   if (fileInput.files && fileInput.files[0]) {
     setAttachment(fileInput.files[0]);
@@ -827,10 +1014,6 @@ composerInput.addEventListener('keydown', (e) => {
 });
 
 sendBtn.addEventListener('click', () => { if (!sendBtn.disabled) onSend(); });
-
-document.querySelectorAll('input[name="persona"]').forEach(r => {
-  r.addEventListener('change', (e) => { state.persona = e.target.value; });
-});
 
 newAnalysisBtn.addEventListener('click', () => {
   if (state.busy) return;
@@ -886,7 +1069,7 @@ settingsModal.querySelectorAll('.tab').forEach(tab => {
 settingsModal.querySelectorAll('[data-reset]').forEach(btn => {
   btn.addEventListener('click', () => resetPromptField(btn.getAttribute('data-reset')));
 });
-savePromptsBtn.addEventListener('click', async () => {
+async function savePrompts() {
   savePromptsBtn.disabled = true;
   try {
     const body = {
@@ -912,8 +1095,87 @@ savePromptsBtn.addEventListener('click', async () => {
   } finally {
     savePromptsBtn.disabled = false;
   }
+}
+
+async function saveLlmConfig() {
+  saveLlmBtn.disabled = true;
+  savePromptsBtn.disabled = true;
+  try {
+    const body = {};
+    for (const role of LLM_ROLES) {
+      const row = settingsModal.querySelector(`.llm-row[data-role="${role}"]`);
+      if (!row) continue;
+      const backend = row.querySelector('.llm-backend').value;
+      const model = row.querySelector('.llm-model').value;
+      body[role] = backend === 'codex'
+        ? { backend, model: CODEX_MODEL, reasoningEffort: model || DEFAULT_CODEX_REASONING_EFFORT }
+        : { backend, model };
+    }
+    const res = await fetch('/api/llm-config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (res.ok) {
+      flashLlmStatus('저장됨');
+    } else {
+      let msg = `오류 (${res.status})`;
+      try { const j = await res.json(); if (j.error) msg = j.error; } catch { /* ignore */ }
+      flashLlmStatus(msg, true);
+    }
+  } catch (err) {
+    flashLlmStatus(`네트워크 오류: ${err.message}`, true);
+  } finally {
+    saveLlmBtn.disabled = false;
+    savePromptsBtn.disabled = false;
+  }
+}
+
+savePromptsBtn.addEventListener('click', async () => {
+  const activeTab = settingsModal.querySelector('.tab.active')?.dataset.tab;
+  if (activeTab === 'llm') {
+    await saveLlmConfig();
+  } else {
+    await savePrompts();
+  }
+});
+
+saveLlmBtn.addEventListener('click', saveLlmConfig);
+
+resetLlmBtn.addEventListener('click', async () => {
+  try {
+    const res = await fetch('/api/llm-config/defaults');
+    if (!res.ok) return;
+    const json = await res.json();
+    fillLlmRows(json);
+  } catch { /* ignore */ }
+});
+
+// 로그인 상태 버튼들
+if (authBannerRefreshBtn) authBannerRefreshBtn.addEventListener('click', () => fetchAuthStatus(true));
+if (authBlockerRefreshBtn) {
+  authBlockerRefreshBtn.addEventListener('click', async () => {
+    if (authBlockerStatus) {
+      authBlockerStatus.textContent = '확인 중...';
+      authBlockerStatus.classList.add('visible');
+    }
+    await fetchAuthStatus(true);
+    if (authBlockerStatus) {
+      authBlockerStatus.textContent = '확인 완료';
+      setTimeout(() => { authBlockerStatus.classList.remove('visible'); authBlockerStatus.textContent = ''; }, 1500);
+    }
+  });
+}
+if (authBannerHelpBtn) authBannerHelpBtn.addEventListener('click', () => { if (authBlocker) authBlocker.hidden = false; });
+if (authBlockerCloseBtn) authBlockerCloseBtn.addEventListener('click', () => {
+  // 둘 다 로그아웃 상태면 닫지 못하게(다시 열림)
+  if (!authStatus) return;
+  const anyOk = authStatus.claude?.loggedIn || authStatus.codex?.loggedIn;
+  if (anyOk && authBlocker) authBlocker.hidden = true;
 });
 
 // 초기 상태
 autoGrow();
+updateComposerMode();
 updateSendState();
+fetchAuthStatus();

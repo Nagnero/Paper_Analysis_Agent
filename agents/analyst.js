@@ -1,6 +1,6 @@
 // agents/analyst.js
 // 분석가 에이전트: 영어 논문에서 구조화된 claim + 재현가능성 정보 추출.
-import { callClaudeJson } from '../core/claudeClient.js';
+import { callLLMJson } from '../core/llm.js';
 import { fillTemplate, buildEmphasisBlock } from '../core/promptStore.js';
 
 const ANALYST_MAX_CHARS = 400_000;
@@ -11,7 +11,7 @@ const SCHEMA_HINT = `{
   "reproducibility": {"codeUrl": "string|null", "datasetAvailability": "string", "hyperparametersSpecified": false, "hardware": "string|null", "trainingTime": "string|null", "seedSpecified": false, "envSpecified": false, "notes": "string"}
 }`;
 
-export async function run({ paperText, prompts, emphasis, extractionFocus, onMeta }) {
+export async function run({ paperText, prompts, emphasis, extractionFocus, llm = {}, onMeta }) {
   let text = paperText;
   if (text.length > ANALYST_MAX_CHARS) {
     console.warn(`[analyst] paperText ${text.length}자 → ${ANALYST_MAX_CHARS}자로 절단됨`);
@@ -26,8 +26,11 @@ export async function run({ paperText, prompts, emphasis, extractionFocus, onMet
     extractionFocus_block: focusBlock,
   });
   let meta;
-  const out = await callClaudeJson(filled, SCHEMA_HINT, {
+  const out = await callLLMJson(filled, SCHEMA_HINT, {
     timeoutMs: 900_000,
+    backend: llm.backend,
+    model: llm.model,
+    reasoningEffort: llm.reasoningEffort,
     onMeta: m => { meta = m; },
   });
   if (onMeta && meta) onMeta(meta);

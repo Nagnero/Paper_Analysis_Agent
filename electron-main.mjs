@@ -6,15 +6,15 @@
 //   - 둘 다 OK           → / (메인 채팅 UI)
 import { app, BrowserWindow, shell } from 'electron';
 import { startServer } from './server.js';
-import { checkAuthStatus } from './core/claudeClient.js';
 
+// Authentication routing is handled in public/app.js via /api/auth-status.
 let mainWindow = null;
 let serverHandle = null;
 
 function startupErrorPage(message) {
   const safe = String(message).replace(/[<&>]/g, c => ({ '<': '&lt;', '&': '&amp;', '>': '&gt;' }[c]));
   const html = `<!doctype html>
-<html lang="ko"><head><meta charset="utf-8"><title>Veridict — 시작 실패</title>
+<html lang="ko"><head><meta charset="utf-8"><title>PAA — 시작 실패</title>
 <style>
   body { margin:0; padding:48px; background:#0e0f13; color:#e6e6e6;
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif; }
@@ -29,19 +29,13 @@ function startupErrorPage(message) {
   return 'data:text/html;charset=utf-8;base64,' + Buffer.from(html, 'utf8').toString('base64');
 }
 
-function pickTargetPath(status) {
-  if (!status.binary) return '/setup?reason=missing';
-  if (!status.authenticated) return '/setup?reason=login';
-  return '/';
-}
-
 async function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1100,
     height: 800,
     minWidth: 800,
     minHeight: 600,
-    title: 'Veridict',
+    title: 'PAA',
     backgroundColor: '#0e0f13',
     show: false,
     autoHideMenuBar: true,
@@ -71,9 +65,7 @@ async function createWindow() {
     if (!serverHandle) {
       serverHandle = await startServer({ host: '127.0.0.1', port: 0 });
     }
-    const status = await checkAuthStatus();
-    const target = pickTargetPath(status);
-    await mainWindow.loadURL(`http://127.0.0.1:${serverHandle.port}${target}`);
+    await mainWindow.loadURL(`http://127.0.0.1:${serverHandle.port}/`);
   } catch (err) {
     await mainWindow.loadURL(startupErrorPage(err?.stack || err?.message || String(err)));
   }
