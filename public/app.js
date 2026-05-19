@@ -195,19 +195,19 @@ const authBlockerCloseBtn = $('authBlockerCloseBtn');
 const authBlockerStatus = $('authBlockerStatus');
 
 const CLAUDE_MODELS = [
-  { value: '', label: '기본값 (claude CLI 디폴트)' },
-  { value: 'claude-opus-4-7', label: 'Opus 4.7 (최고 성능)' },
+  { value: 'claude-opus-4-7', label: 'Opus 4.7 (기본값, 최고 성능)' },
   { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6 (균형)' },
   { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5 (빠름/저렴)' },
+  { value: '', label: 'CLI 자동 선택' },
 ];
 const CODEX_MODELS = [
   { value: 'low', label: 'GPT-5.5 · low' },
   { value: 'medium', label: 'GPT-5.5 · medium' },
-  { value: 'high', label: 'GPT-5.5 · high' },
+  { value: 'high', label: 'GPT-5.5 · high (기본값)' },
   { value: 'xhigh', label: 'GPT-5.5 · xhigh' },
 ];
 const CODEX_MODEL = 'gpt-5.5';
-const DEFAULT_CODEX_REASONING_EFFORT = 'medium';
+const DEFAULT_CODEX_REASONING_EFFORT = 'high';
 
 function getModelsFor(backend) {
   const list = backend === 'codex' ? CODEX_MODELS : CLAUDE_MODELS;

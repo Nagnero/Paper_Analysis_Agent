@@ -1,4 +1,4 @@
-# PAA (Paper Analysis Agent) · v0.2.3
+# PAA (Paper Analysis Agent) · v0.2.4
 
 영어 논문 PDF 한 편을 입력하면 4개의 LLM 에이전트(orchestrator → analyst → verifier → writer)가 협업해 **각 주장(claim)에 원문 근거가 매핑된 한국어 분석 리포트**를 생성하는 데스크탑 앱입니다.
 

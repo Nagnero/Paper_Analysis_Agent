@@ -5,13 +5,14 @@ const ROLES = ['orchestrator', 'analyst', 'verifier', 'writer', 'audit', 'chat']
 
 export const CODEX_MODEL = 'gpt-5.5';
 export const CODEX_REASONING_EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh']);
-export const DEFAULT_CODEX_REASONING_EFFORT = 'medium';
+export const DEFAULT_CODEX_REASONING_EFFORT = 'high';
+export const DEFAULT_CLAUDE_MODEL = 'claude-opus-4-7';
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-function claudeConfig(model = '') {
+function claudeConfig(model = DEFAULT_CLAUDE_MODEL) {
   return { backend: 'claude', model, reasoningEffort: '' };
 }
 
