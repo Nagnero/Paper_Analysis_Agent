@@ -5,7 +5,13 @@
 //   - binary 있고 미로그인 → /setup?reason=login   (로그인 안내 + 자동 폴링)
 //   - 둘 다 OK           → / (메인 채팅 UI)
 import { app, BrowserWindow, shell } from 'electron';
+import fixPath from 'fix-path';
 import { startServer } from './server.js';
+
+// macOS/Linux 에서 Finder/Dock 으로 실행한 .app 은 로그인 셸의 PATH 를 상속받지 못해
+// /opt/homebrew/bin 같은 위치의 claude/codex 바이너리를 못 찾는다.
+// fix-path 가 유저의 기본 셸에서 PATH 를 가져와 process.env.PATH 에 병합한다 (Windows 에선 no-op).
+fixPath();
 
 // Authentication routing is handled in public/app.js via /api/auth-status.
 let mainWindow = null;
