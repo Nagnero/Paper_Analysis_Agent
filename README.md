@@ -1,8 +1,8 @@
-# PAA (Paper Analysis Agent) · v0.2.0
+# PAA (Paper Analysis Agent) · v0.2.1
 
-영어 논문 PDF 한 편을 입력하면 4개의 LLM 에이전트(orchestrator → analyst → verifier → writer)가 협업해 **각 주장(claim)에 원문 근거가 매핑된 한국어 분석 리포트**를 생성하는 Electron 데스크탑 앱입니다.
+영어 논문 PDF 한 편을 입력하면 4개의 LLM 에이전트(orchestrator → analyst → verifier → writer)가 협업해 **각 주장(claim)에 원문 근거가 매핑된 한국어 분석 리포트**를 생성하는 데스크탑 앱입니다.
 
-본 도구는 Anthropic API 키를 사용하지 않습니다. 사용자의 **Claude Pro/Max 구독**에 연결된 `claude` Code CLI 를 로컬에서 subprocess 로 호출해 동작합니다. 토큰당 과금이 없고, 분석한 PDF 는 외부 서버에 업로드되지 않습니다.
+본 도구는 어떤 LLM API 키도 사용하지 않습니다. 사용자의 **Claude Pro/Max 구독**에 연결된 `claude` Code CLI, 또는 **ChatGPT 구독**에 연결된 `codex` CLI 를 로컬에서 subprocess 로 호출해 동작합니다 (역할별로 선택 가능). 토큰당 추가 과금이 없고, 분석한 PDF 는 외부 서버에 업로드되지 않습니다.
 
 ## 한 줄 요약
 
@@ -10,43 +10,53 @@
 
 ## 시스템 구성도
 
+PAA 는 사용자의 로컬 CLI(`claude` / `codex`)를 통해 LLM 을 호출합니다. 따라서 **앱 실행 전에 백엔드 CLI 로그인이 한 번 필요**하고, 그 다음부터는 파이프라인이 그 자격증명을 그대로 빌려 씁니다.
+
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                  Electron (electron-main.mjs)               │
-│  - BrowserWindow → http://127.0.0.1:<port> 로드             │
-│  - 시작 시 claude CLI 가용성 프로브                          │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ in-process
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│         HTTP / SSE server (server.js)                       │
-│  POST /analyze   ─ PDF 업로드 → 분석 스트림                  │
-│  POST /chat      ─ 분석 후 후속 질의응답                     │
-│  GET/PUT /api/prompts  ─ 프롬프트 런타임 편집                │
-└──────────────────────────┬──────────────────────────────────┘
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│              Pipeline (pipeline.js)                         │
-│                                                             │
-│  utils/parsePdf  →  text                                    │
-│        │                                                    │
-│        ▼                                                    │
-│  ┌─ agents/orchestrator   (emphasis 해석 → directive)       │
-│  ├─ agents/analyst        (claim + reproducibility 추출)    │
-│  ├─ agents/verifier       (BM25 retrieval + claim 별 검증)  │
-│  ├─ agents/focusedAudit   (ad-hoc 감사 작업, 병렬)          │
-│  └─ agents/writer         (한국어 11-섹션 Markdown 작성)    │
-│                                                             │
-│  검증 상태: supported / partially_supported /               │
-│             unsupported / contradicted                      │
-└──────────────────────────┬──────────────────────────────────┘
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│   core/claudeClient  ──  spawn('claude -p --output-format   │
-│                                  json < prompt.txt')        │
-│              ▼                                              │
-│        사용자의 Claude Code CLI (본인 구독)                  │
-└─────────────────────────────────────────────────────────────┘
+[사전 1회] 백엔드 CLI 로그인
+─────────────────────────────────────────────────────────────
+   사용자 ──▶  claude  (https://claude.com/code)
+                └─ Claude Pro / Max 계정 OAuth
+        ──▶  codex   (선택, https://github.com/openai/codex)
+                └─ ChatGPT 구독 또는 API 키 로그인
+
+                              │
+                              ▼
+[앱 실행 시] 가용성 프로브 — core/authStatus.js
+─────────────────────────────────────────────────────────────
+  claude auth status --json   ─┐
+  codex login status          ─┤── 가용한 백엔드 목록
+                                │   설정 화면에 표시
+                              │
+                              ▼
+[분석 트리거] PDF 첨부 + (선택) 강조사항 입력
+─────────────────────────────────────────────────────────────
+  utils/parsePdf → text
+
+                              │
+                              ▼
+[파이프라인] pipeline.js — 4단계 + 1 보조
+─────────────────────────────────────────────────────────────
+  ① orchestrator   emphasis 해석 → directive
+       │
+  ② analyst        claim + reproducibility 추출
+       │
+  ③ verifier       BM25 retrieval + claim 별 근거 확인
+       │           라벨: supported / partially_supported /
+       │                 unsupported / contradicted
+       ├ (병렬) focusedAudit  ad-hoc 감사 작업
+       │
+  ④ writer         한국어 11-섹션 Markdown 리포트
+
+  각 단계는 core/llmConfig 에 따라
+  → core/claudeClient  (spawn 'claude -p --output-format json')
+   또는
+  → core/codexCli      (spawn 'codex exec --skip-git-repo-check')
+  로 라우팅
+
+                              │
+                              ▼
+[결과] 한국어 11-섹션 리포트 + claim 별 검증 표 + 단계별 메트릭
 ```
 
 ## 주요 기능
@@ -60,52 +70,42 @@
 
 ## 요구사항
 
+최소 백엔드 CLI **하나 이상**이 설치 + 로그인된 상태여야 합니다 (둘 다 있으면 역할별로 선택 가능).
+
 | 항목 | 버전 / 설명 |
 |---|---|
 | **OS** | Windows 10/11 (검증), macOS / Linux (코드 호환, 미검증) |
-| **Node.js** | **24.15.0 (LTS) 권장** · `>=20 <26` 범위 지원. Node 26+ 에서 electron post-install 다운로드 실패 케이스 보고됨 |
-| **Claude Code CLI** | https://claude.com/code — 사전 설치 + `claude` 한 번 실행해 본인 계정 로그인 필요 |
-| **구독** | Claude Pro 또는 Max (사용자 본인 계정) |
+| **Claude Code CLI** (백엔드 1) | https://claude.com/code — 사전 설치 + `claude` 실행해 Claude Pro/Max 계정 로그인 |
+| **Codex CLI** (백엔드 2, 선택) | https://github.com/openai/codex — 사전 설치 + `codex login` 으로 ChatGPT 구독 또는 API 키 인증. **v0.2.1+** 부터 지원 |
+| **Node.js** | 소스에서 직접 실행할 경우만 필요. **24.15.0 (LTS) 권장** · `>=20 <26` 범위 지원. Node 26+ 에서 electron post-install 다운로드 실패 케이스 보고됨 |
 
-> PAA 는 어떤 API 키도 저장하거나 요구하지 않습니다. 인증은 전적으로 사용자의 `claude` CLI 가 관리합니다.
+> PAA 는 어떤 LLM API 키도 저장하거나 요구하지 않습니다. 인증은 전적으로 사용자의 `claude` / `codex` CLI 가 관리합니다.
 
 ## Quick start
 
-### 옵션 A — 소스에서 실행 (가장 빠름)
+### 옵션 A — 사전 빌드된 exe 다운로드 (추천)
+
+1. **백엔드 CLI 로그인** — `claude` 또는 `codex` 둘 중 하나(또는 둘 다) 설치하고 한 번 로그인.
+2. [**Releases**](https://github.com/evejaeyong/Paper_Analysis_Agent/releases/latest) 페이지에서 둘 중 하나 다운로드:
+   - **`PAA Setup x.y.z.exe`** — 설치형. 시작 메뉴 / 바탕화면 단축키 생성.
+   - **`PAA-x.y.z-portable.exe`** — 포터블. 다운로드한 파일 더블클릭만으로 실행 (설치 X, 임시 폴더에 자동 압축 해제).
+3. 실행하면 채팅형 UI 가 뜹니다. CLI 가 없거나 미로그인이면 안내 화면이 뜨니, 거기 링크 따라 설치/로그인 후 **다시 시도** 클릭.
+
+> 첫 실행 시 SmartScreen "Windows 가 PC 를 보호했습니다" 경고가 뜰 수 있어요 — 코드사이닝 미적용 빌드라 정상 경고입니다. **자세히 → 실행** 으로 진행.
+
+### 옵션 B — 소스에서 실행 (개발자 / 코드 수정)
 
 ```bash
 git clone https://github.com/evejaeyong/Paper_Analysis_Agent.git paa
 cd paa
 npm install
-npm start              # Electron 데스크탑 앱 가동
+npm start
 ```
 
 `npm start` 가 다음을 순서로 수행합니다:
-1. `claude --version` 으로 CLI 가용성 확인
+1. `claude` / `codex` CLI 가용성 프로브 (`core/authStatus`)
 2. 임의 포트에 로컬 HTTP/SSE 서버 부트
 3. BrowserWindow 가 그 페이지를 로드 → 채팅형 UI 표시
-
-CLI 가 없거나 미로그인이면 안내 화면이 뜹니다. 거기서 `claude.com/code` 링크 → 설치 → 터미널에서 `claude` 한 번 실행 → 본인 계정 로그인 → 앱에서 **다시 시도** 클릭.
-
-### 옵션 B — Windows .exe 인스톨러 직접 빌드
-
-```powershell
-# Windows Developer Mode 켜야 함 (Settings → Privacy & Security → For developers)
-$env:CSC_IDENTITY_AUTO_DISCOVERY = "false"
-npm run dist:win
-# → dist\PAA Setup 0.2.0.exe (약 106 MB)
-```
-
-생성된 인스톨러는 다른 PC 로 배포 가능. 받는 사람도 **Claude Code CLI 사전 설치 + 본인 로그인** 은 필요합니다.
-
-### 옵션 C — CLI 모드 (앱 없이 한 편 분석)
-
-```bash
-node pipeline.js path/to/paper.pdf
-# → paper.pdf 와 같은 폴더에 report.md 생성
-```
-
-서버/UI 없이 한 편의 PDF 를 분석해 마크다운 리포트만 떨어뜨리고 끝납니다. 배치 스크립트나 CI 에 끼우기 좋습니다.
 
 ## 사용 흐름
 
@@ -137,15 +137,13 @@ npm start
 
 `claude` CLI 가 PATH 에 없는 상태. https://claude.com/code 에서 설치 후 새 터미널에서 `claude --version` 확인. 인증은 처음 `claude` 실행 시 자동 OAuth.
 
-### Windows 빌드 실패 — `Cannot create symbolic link`
-
-`electron-builder` 가 `winCodeSign` 패키지 안의 macOS 파일을 추출하면서 심볼릭 링크를 만들려고 합니다. Windows 는 일반 사용자가 symlink 생성 불가.
-
-**해결**: Windows **Developer Mode** ON (Settings → Privacy & Security → For developers → Developer Mode). 토글 후 즉시 적용, 재부팅 불필요. 캐시(`%LOCALAPPDATA%\electron-builder\Cache\winCodeSign`) 비우고 재빌드.
-
 ### SmartScreen "Windows 가 PC 를 보호했습니다" 경고
 
-코드사이닝 인증서를 적용하지 않은 첫 릴리즈입니다. **자세히 → 실행** 으로 진행하시면 됩니다.
+코드사이닝 인증서를 적용하지 않은 릴리즈입니다. **자세히 → 실행** 으로 진행하시면 됩니다.
+
+### `codex exit 1: Not inside a trusted directory`
+
+**v0.2.1 미만에서 발생하던 이슈** — 설치본의 CWD 가 git repo 가 아니라 Codex CLI 가 거부하던 케이스. v0.2.1 부터 호출별 임시 폴더로 격리해 해결됐습니다. 최신 릴리즈로 업데이트하세요.
 
 ### 분석 도중 응답이 끊겨요
 
@@ -153,12 +151,12 @@ npm start
 
 ## 비용 & 프라이버시
 
-- **비용 모델**: Claude Pro/Max 월정액 그대로. 페이퍼 당 추가 과금 없음. Anthropic API 키 미사용.
+- **비용 모델**: Claude Pro/Max 또는 ChatGPT 구독 월정액 그대로 (사용하는 백엔드에 따라). 페이퍼 당 추가 과금 없음. Anthropic / OpenAI API 키 미사용.
 - **프라이버시**:
   - PDF 는 OS 임시 디렉토리(`os.tmpdir()`)에 잠시만 저장되고 분석 직후 삭제.
-  - 분석 결과(리포트, 메트릭, claim 검증)는 Electron 메모리에만 보관 — 세션 종료 시 사라짐.
-  - 자격증명은 `claude` CLI 가 OS 자격증명 저장소에 보관. 본 앱이 직접 다루지 않음.
-  - 외부 네트워크 호출은 오직 `claude` CLI 가 Anthropic 백엔드로 보내는 것뿐.
+  - 분석 결과(리포트, 메트릭, claim 검증)는 앱 메모리에만 보관 — 세션 종료 시 사라짐.
+  - 자격증명은 `claude` / `codex` CLI 가 OS 자격증명 저장소에 보관. 본 앱이 직접 다루지 않음.
+  - 외부 네트워크 호출은 오직 사용자가 선택한 CLI(`claude` → Anthropic, `codex` → OpenAI) 가 자체적으로 백엔드와 통신하는 것뿐.
 
 ## 한계 / 알려진 이슈
 
