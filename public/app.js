@@ -198,7 +198,6 @@ const CLAUDE_MODELS = [
   { value: 'claude-opus-4-7', label: 'Opus 4.7 (기본값, 최고 성능)' },
   { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6 (균형)' },
   { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5 (빠름/저렴)' },
-  { value: '', label: 'CLI 자동 선택' },
 ];
 const CODEX_MODELS = [
   { value: 'low', label: 'GPT-5.5 · low' },
@@ -233,7 +232,7 @@ function populateModelSelect(selectEl, backend, currentModel, currentReasoningEf
     if (currentValue) {
       console.warn(`모델 ${currentModel}이(가) 카탈로그에 없어 기본값으로 설정`);
     }
-    selectEl.value = '';
+    selectEl.value = options[0].value;
   }
 }
 
