@@ -7,51 +7,89 @@
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-  <header class="top">
-    <div class="top-inner">
-      <div class="brand">Korean Paper Agent Console <span class="ver">v0.2.0</span></div>
-      <div class="top-actions">
-        <button type="button" id="openSettingsBtn" class="btn-ghost">⚙ 설정</button>
-        <button type="button" id="newAnalysisBtn" class="btn-ghost">새 분석</button>
+  <div id="appLayout">
+    <aside id="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-brand">📚 PAA</div>
+        <button type="button" id="newAnalysisBtn" class="sidebar-action primary">＋ 새 분석</button>
       </div>
+      <div class="sidebar-section-head">
+        <span>라이브러리</span>
+        <button type="button" id="newFolderBtn" class="sidebar-icon-btn" title="새 폴더 만들기" aria-label="새 폴더 만들기">＋</button>
+      </div>
+      <nav id="libraryTree" class="library-tree"></nav>
+      <div class="sidebar-footer">
+        <button type="button" id="sidebarSettingsBtn" class="sidebar-foot-btn">⚙ 설정</button>
+      </div>
+    </aside>
+    <div id="mainArea">
+      <header class="top">
+        <div class="top-inner">
+          <div class="brand">Korean Paper Agent Console <span class="ver">v0.3.0</span></div>
+        </div>
+      </header>
+
+      <div id="authBanner" class="auth-banner" hidden>
+        <span class="auth-banner-text"></span>
+        <button type="button" id="authBannerRefreshBtn" class="btn-secondary">다시 확인</button>
+        <button type="button" id="authBannerHelpBtn" class="btn-secondary">로그인 방법</button>
+      </div>
+
+      <main class="chat-main">
+        <div id="messages" class="messages" aria-live="polite"></div>
+      </main>
+
+      <footer class="composer">
+        <div class="composer-inner">
+          <div class="hint-row"><span id="composerHint" class="hint"></span></div>
+          <button type="button" id="attachZone" class="attach-zone">
+            <span class="attach-zone-icon" aria-hidden="true">📄</span>
+            <span class="attach-zone-title">PDF 첨부하여 분석 시작</span>
+            <span class="attach-zone-sub">클릭하여 선택하거나 파일을 끌어다 놓으세요</span>
+          </button>
+          <div id="attachmentChip" class="attach-chip" hidden>
+            <span class="chip-icon">📄</span>
+            <span id="attachName" class="chip-name"></span>
+            <span id="attachSize" class="chip-size"></span>
+            <button type="button" id="attachClear" class="chip-x" aria-label="첨부 제거">×</button>
+          </div>
+          <div id="composerRow" class="composer-row">
+            <textarea id="composerInput" class="composer-input" rows="1" placeholder="후속 질문을 입력하세요..."></textarea>
+            <button type="button" id="sendBtn" class="send-btn" title="보내기" disabled>↑</button>
+            <input id="fileInput" type="file" accept="application/pdf,.pdf" hidden>
+          </div>
+        </div>
+      </footer>
     </div>
-  </header>
-
-  <div id="authBanner" class="auth-banner" hidden>
-    <span class="auth-banner-text"></span>
-    <button type="button" id="authBannerRefreshBtn" class="btn-secondary">다시 확인</button>
-    <button type="button" id="authBannerHelpBtn" class="btn-secondary">로그인 방법</button>
   </div>
-
-  <main class="chat-main">
-    <div id="messages" class="messages" aria-live="polite"></div>
-  </main>
 
   <div id="dropOverlay" class="drop-overlay" hidden>
     <div class="drop-overlay-card">PDF를 여기에 놓으세요</div>
   </div>
 
-  <footer class="composer">
-    <div class="composer-inner">
-      <div class="hint-row"><span id="composerHint" class="hint"></span></div>
-      <button type="button" id="attachZone" class="attach-zone">
-        <span class="attach-zone-icon" aria-hidden="true">📄</span>
-        <span class="attach-zone-title">PDF 첨부하여 분석 시작</span>
-        <span class="attach-zone-sub">클릭하여 선택하거나 파일을 끌어다 놓으세요</span>
-      </button>
-      <div id="attachmentChip" class="attach-chip" hidden>
-        <span class="chip-icon">📄</span>
-        <span id="attachName" class="chip-name"></span>
-        <span id="attachSize" class="chip-size"></span>
-        <button type="button" id="attachClear" class="chip-x" aria-label="첨부 제거">×</button>
+  <div id="contextMenu" class="context-menu" hidden>
+    <button type="button" data-action="rename">이름 변경</button>
+    <button type="button" data-action="move">폴더 이동</button>
+    <button type="button" data-action="delete" class="danger">삭제</button>
+  </div>
+
+  <div id="folderPicker" class="modal" hidden>
+    <div class="modal-overlay" data-close></div>
+    <div class="modal-card folder-picker-card">
+      <div class="modal-head">
+        <h2>폴더 선택</h2>
+        <button type="button" class="modal-close" data-close aria-label="닫기">×</button>
       </div>
-      <div id="composerRow" class="composer-row">
-        <textarea id="composerInput" class="composer-input" rows="1" placeholder="후속 질문을 입력하세요..."></textarea>
-        <button type="button" id="sendBtn" class="send-btn" title="보내기" disabled>↑</button>
-        <input id="fileInput" type="file" accept="application/pdf,.pdf" hidden>
+      <div class="modal-body">
+        <ul id="folderPickerList"></ul>
+      </div>
+      <div class="modal-foot">
+        <button type="button" id="folderPickerNullBtn" class="btn-secondary">폴더에서 빼기</button>
+        <span class="spacer"></span>
+        <button type="button" data-close class="btn-secondary">취소</button>
       </div>
     </div>
-  </footer>
+  </div>
 
   <div id="settingsModal" class="modal" hidden>
     <div class="modal-overlay" data-close></div>
@@ -64,6 +102,7 @@
         <button type="button" class="tab active" data-tab="orchestrator">오케스트레이터</button>
         <button type="button" class="tab" data-tab="team">분석팀</button>
         <button type="button" class="tab" data-tab="llm">모델</button>
+        <button type="button" class="tab" data-tab="danger">위험 영역</button>
       </div>
       <div class="modal-body">
         <div class="tab-pane active" data-pane="orchestrator">
@@ -131,6 +170,13 @@
             <button type="button" id="resetLlmBtn" class="btn-ghost small">모든 값을 기본값으로</button>
             <button type="button" id="saveLlmBtn" class="primary">저장</button>
             <span id="llmStatus" class="hint"></span>
+          </div>
+        </div>
+        <div class="tab-pane" data-pane="danger">
+          <div class="danger-zone">
+            <h3>위험 영역</h3>
+            <button type="button" id="libraryResetBtn" class="danger">라이브러리 전체 초기화</button>
+            <p class="hint-static">모든 폴더/논문/분석/채팅과 PDF 파일이 영구 삭제됩니다.</p>
           </div>
         </div>
       </div>

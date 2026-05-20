@@ -1,6 +1,7 @@
 // core/authStatus.js
 // Claude / Codex CLI 로그인 상태 확인. 결과는 10초 캐시.
 import { spawn } from 'node:child_process';
+import os from 'node:os';
 
 const CACHE_TTL_MS = 10_000;
 let cache = null;
@@ -16,7 +17,10 @@ function spawnCheck(bin, args, timeoutMs = 8000) {
       resolve({ stdout: '', stderr: 'timeout', code: -1 });
     }, timeoutMs);
     try {
-      proc = spawn(command, [], { shell: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      // cwd 를 OS 임시 디렉토리로 고정 — Finder/Dock 로 실행된 .app 의 기본 CWD 가 '/' 라서
+      // claude/codex 가 root 하위 폴더(Desktop/Downloads 등)를 둘러보며 macOS TCC 권한 프롬프트를
+      // 띄우는 케이스를 차단.
+      proc = spawn(command, [], { shell: true, stdio: ['ignore', 'pipe', 'pipe'], cwd: os.tmpdir() });
     } catch (e) {
       clearTimeout(timer);
       return resolve({ stdout: '', stderr: e.message, code: -1 });

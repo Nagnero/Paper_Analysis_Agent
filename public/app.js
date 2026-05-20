@@ -144,6 +144,10 @@ const state = {
   pendingPdf: null,
   busy: false,
   messages: [],
+  libraryTree: { folders: [], unfoldered: [] },
+  currentPaperId: null,
+  currentAnalysisId: null,
+  mode: 'new',
 };
 
 let authStatus = null;
@@ -171,8 +175,16 @@ const attachSize = $('attachSize');
 const attachClear = $('attachClear');
 const composerHint = $('composerHint');
 const dropOverlay = $('dropOverlay');
-const openSettingsBtn = $('openSettingsBtn');
+const openSettingsBtn = $('sidebarSettingsBtn');
 const newAnalysisBtn = $('newAnalysisBtn');
+const newFolderBtn = $('newFolderBtn');
+const libraryTreeEl = $('libraryTree');
+const contextMenuEl = $('contextMenu');
+const folderPickerEl = $('folderPicker');
+const folderPickerListEl = $('folderPickerList');
+const folderPickerNullBtn = $('folderPickerNullBtn');
+const libraryResetBtn = $('libraryResetBtn');
+const chatMainEl = document.querySelector('.chat-main');
 const settingsModal = $('settingsModal');
 const savePromptsBtn = $('savePromptsBtn');
 const promptsStatus = $('promptsStatus');
@@ -577,7 +589,7 @@ function updateMessage(id, patch) {
 
 function scrollToBottom() {
   // 부드럽지 않게 즉시 — 분석 중 빈번한 업데이트 때문에
-  window.scrollTo({ top: document.body.scrollHeight });
+  if (chatMainEl) chatMainEl.scrollTop = chatMainEl.scrollHeight;
 }
 
 // ---------------- 입력 / 첨부 ----------------
@@ -611,12 +623,16 @@ function clearAttachment() {
 function updateComposerMode() {
   const hasPdf = !!state.pendingPdf;
   const hasSession = !!state.sessionId;
-  const initial = !hasPdf && !hasSession && !state.busy;
+  const isPaper = state.mode === 'paper' && !!state.currentPaperId;
+  const paperHasAnalysis = isPaper && !!state.currentAnalysisId;
+  const initial = !hasPdf && !hasSession && !isPaper && !state.busy;
   attachZone.hidden = !initial;
   composerRow.hidden = initial;
   composerInput.placeholder = hasPdf
     ? '강조하고 싶은 부분이 있다면 입력하세요 (선택)'
-    : '후속 질문을 입력하세요...';
+    : (isPaper && !paperHasAnalysis)
+      ? '이 논문은 분석 결과가 없습니다. 새 분석을 시작하세요.'
+      : '후속 질문을 입력하세요...';
 }
 
 function autoGrow() {
@@ -627,12 +643,17 @@ function autoGrow() {
 function updateSendState() {
   const text = composerInput.value.trim();
   const hasPdf = !!state.pendingPdf;
+  const isPaper = state.mode === 'paper' && !!state.currentPaperId;
+  const paperHasAnalysis = isPaper && !!state.currentAnalysisId;
   let enabled = !state.busy;
   if (hasPdf) {
     // 분석 가능 (text는 emphasis로 사용, 선택)
-  } else if (state.sessionId && text) {
+  } else if (isPaper && !paperHasAnalysis) {
+    // paper 모드인데 분석이 없으면 채팅 불가
+    enabled = false;
+  } else if ((state.sessionId || paperHasAnalysis) && text) {
     // 채팅 가능
-  } else if (!state.sessionId) {
+  } else if (!state.sessionId && !paperHasAnalysis) {
     enabled = false;
   } else if (!text) {
     enabled = false;
@@ -715,6 +736,12 @@ function handleSseEvent(payload, msgId) {
       state.sessionId = payload.sessionId;
       updateComposerMode();
     }
+    if (payload.paperId) {
+      state.currentPaperId = payload.paperId;
+      state.currentAnalysisId = payload.analysisId;
+      state.mode = 'paper';
+      refreshLibrary();
+    }
     renderMsg(msg);
     scrollToBottom();
     return;
@@ -735,10 +762,16 @@ async function sendChat(question) {
   state.busy = true;
   updateSendState();
   try {
-    const res = await fetch('/chat', {
+    const url = state.mode === 'paper' && state.currentPaperId
+      ? `/api/library/papers/${state.currentPaperId}/chat`
+      : '/chat';
+    const body = state.mode === 'paper' && state.currentPaperId
+      ? { question }
+      : { sessionId: state.sessionId, question };
+    const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId: state.sessionId, question }),
+      body: JSON.stringify(body),
     });
     let json = null;
     try { json = await res.json(); } catch { /* ignore */ }
@@ -829,6 +862,9 @@ function clearConversation() {
   state.messages = [];
   state.busy = false;
   state.pendingPdf = null;
+  state.currentPaperId = null;
+  state.currentAnalysisId = null;
+  state.mode = 'new';
   messagesEl.innerHTML = '';
   clearAttachment();
   composerInput.value = '';
@@ -836,6 +872,14 @@ function clearConversation() {
   setComposerHint('');
   newAnalysisBtn.classList.remove('highlight');
   updateSendState();
+  renderSidebar();
+}
+
+function startNewAnalysis() {
+  if (state.busy) {
+    if (!confirm('진행 중인 분석이 있습니다. 버리고 새로 시작할까요?')) return;
+  }
+  clearConversation();
 }
 
 let promptsLoaded = false;
@@ -1014,10 +1058,7 @@ composerInput.addEventListener('keydown', (e) => {
 
 sendBtn.addEventListener('click', () => { if (!sendBtn.disabled) onSend(); });
 
-newAnalysisBtn.addEventListener('click', () => {
-  if (state.busy) return;
-  clearConversation();
-});
+newAnalysisBtn.addEventListener('click', startNewAnalysis);
 
 // 드래그 앤 드롭 (페이지 전체)
 let dragDepth = 0;
@@ -1173,8 +1214,464 @@ if (authBlockerCloseBtn) authBlockerCloseBtn.addEventListener('click', () => {
   if (anyOk && authBlocker) authBlocker.hidden = true;
 });
 
+// ---------------- 라이브러리 사이드바 ----------------
+
+const FOLDER_STATE_KEY = 'paaFolderState';
+
+function loadFolderOpenState() {
+  try {
+    const raw = localStorage.getItem(FOLDER_STATE_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw) || {};
+  } catch { return {}; }
+}
+function saveFolderOpenState(map) {
+  try { localStorage.setItem(FOLDER_STATE_KEY, JSON.stringify(map)); } catch { /* ignore */ }
+}
+
+function renderSidebar() {
+  const openState = loadFolderOpenState();
+  libraryTreeEl.innerHTML = '';
+  const tree = state.libraryTree || { folders: [], unfoldered: [] };
+
+  for (const p of tree.unfoldered || []) {
+    libraryTreeEl.appendChild(buildPaperItem(p));
+  }
+
+  for (const folder of tree.folders || []) {
+    const wrap = document.createElement('div');
+    wrap.className = 'folder';
+    wrap.dataset.folderId = folder.id;
+
+    const head = document.createElement('div');
+    head.className = 'folder-head';
+    head.dataset.folderId = folder.id;
+    const isOpen = openState[folder.id] !== false; // 기본 열림
+
+    const toggle = document.createElement('span');
+    toggle.className = 'folder-toggle';
+    toggle.textContent = isOpen ? '▼' : '▶';
+    const icon = document.createElement('span');
+    icon.className = 'folder-icon';
+    icon.textContent = '📁';
+    const name = document.createElement('span');
+    name.className = 'folder-name';
+    name.textContent = folder.name;
+    const count = document.createElement('span');
+    count.className = 'folder-count';
+    count.textContent = `(${(folder.papers || []).length})`;
+    const menu = document.createElement('button');
+    menu.type = 'button';
+    menu.className = 'row-menu';
+    menu.textContent = '⋯';
+    menu.addEventListener('click', (e) => {
+      e.stopPropagation();
+      showContextMenu(e.clientX, e.clientY, { kind: 'folder', id: folder.id, name: folder.name });
+    });
+
+    head.append(toggle, icon, name, count, menu);
+
+    const body = document.createElement('div');
+    body.className = 'folder-body';
+    if (!isOpen) body.hidden = true;
+    for (const p of folder.papers || []) {
+      body.appendChild(buildPaperItem(p));
+    }
+
+    head.addEventListener('click', (e) => {
+      if (e.detail !== 1) return;
+      if (e.target === menu) return;
+      const nowOpen = body.hidden;
+      body.hidden = !nowOpen;
+      toggle.textContent = nowOpen ? '▼' : '▶';
+      const st = loadFolderOpenState();
+      st[folder.id] = nowOpen;
+      saveFolderOpenState(st);
+    });
+    head.addEventListener('dblclick', (e) => {
+      if (e.target === name) {
+        e.preventDefault();
+        e.stopPropagation();
+        beginRename(name, folder.name, async (newName) => {
+          await patchFolder(folder.id, { name: newName });
+        });
+      }
+    });
+    head.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      showContextMenu(e.clientX, e.clientY, { kind: 'folder', id: folder.id, name: folder.name });
+    });
+
+    wrap.append(head, body);
+    libraryTreeEl.appendChild(wrap);
+  }
+}
+
+function buildPaperItem(paper) {
+  const item = document.createElement('div');
+  item.className = 'paper-item';
+  item.dataset.paperId = paper.id;
+  if (paper.id === state.currentPaperId) item.classList.add('active');
+
+  const icon = document.createElement('span');
+  icon.className = 'paper-icon';
+  icon.textContent = '📄';
+  const title = document.createElement('span');
+  title.className = 'paper-title';
+  title.textContent = paper.title || paper.source_file || '(제목 없음)';
+  title.title = paper.title || paper.source_file || '';
+
+  const menu = document.createElement('button');
+  menu.type = 'button';
+  menu.className = 'row-menu';
+  menu.textContent = '⋯';
+  menu.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showContextMenu(e.clientX, e.clientY, { kind: 'paper', id: paper.id, name: paper.title, folderId: paper.folder_id });
+  });
+
+  item.append(icon, title, menu);
+
+  item.addEventListener('click', (e) => {
+    if (e.detail !== 1) return;
+    if (e.target.closest('.row-menu')) return;
+    openPaper(paper.id);
+  });
+  item.addEventListener('dblclick', (e) => {
+    if (e.target === title) {
+      e.preventDefault();
+      e.stopPropagation();
+      beginRename(title, paper.title || '', async (newTitle) => {
+        await patchPaper(paper.id, { title: newTitle });
+      });
+    }
+  });
+  item.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    showContextMenu(e.clientX, e.clientY, { kind: 'paper', id: paper.id, name: paper.title, folderId: paper.folder_id });
+  });
+
+  return item;
+}
+
+async function refreshLibrary() {
+  try {
+    const res = await fetch('/api/library/tree');
+    if (!res.ok) return;
+    state.libraryTree = await res.json();
+    renderSidebar();
+  } catch { /* ignore */ }
+}
+
+async function openPaper(paperId) {
+  if (state.busy) return;
+  try {
+    const res = await fetch(`/api/library/papers/${paperId}`);
+    if (!res.ok) {
+      setComposerHint(`논문 로딩 실패 (${res.status})`, true);
+      return;
+    }
+    const { paper, analysis, chats } = await res.json();
+    state.mode = 'paper';
+    state.currentPaperId = paper.id;
+    state.currentAnalysisId = analysis ? analysis.id : null;
+    state.sessionId = null;
+    state.messages = [];
+    messagesEl.innerHTML = '';
+    clearAttachment();
+
+    addMessage({
+      id: uid(),
+      role: 'user',
+      kind: 'attachment',
+      file: { name: paper.source_file || paper.title || '논문', size: 0 },
+      text: '',
+    });
+
+    if (analysis) {
+      addMessage({
+        id: uid(),
+        role: 'assistant',
+        kind: 'analysis',
+        status: 'done',
+        progress: [{ stage: 'done', message: '저장된 분석' }],
+        report: analysis.report || '',
+        verifiedClaims: analysis.claims,
+        metrics: analysis.metrics,
+        directive: analysis.directive ?? null,
+        auditResults: analysis.auditResults ?? null,
+      });
+    }
+    for (const c of chats || []) {
+      if (c.role === 'user') {
+        addMessage({ id: uid(), role: 'user', kind: 'chat', text: c.content });
+      } else {
+        addMessage({ id: uid(), role: 'assistant', kind: 'chat', status: 'done', text: c.content });
+      }
+    }
+    updateComposerMode();
+    updateSendState();
+    renderSidebar();
+  } catch (err) {
+    setComposerHint(`논문 로딩 실패: ${err.message}`, true);
+  }
+}
+
+// ---------------- 인라인 이름 편집 ----------------
+
+function beginRename(spanEl, currentValue, onSave) {
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = spanEl.classList.contains('folder-name') ? 'folder-name-input' : 'paper-title-input';
+  input.value = currentValue;
+  spanEl.replaceWith(input);
+  input.focus();
+  input.select();
+
+  let done = false;
+  const finish = async (commit) => {
+    if (done) return;
+    done = true;
+    const newValue = input.value.trim();
+    try {
+      if (commit && newValue && newValue !== currentValue) {
+        await onSave(newValue);
+        spanEl.textContent = newValue;
+      }
+    } catch (e) {
+      console.warn(e);
+    } finally {
+      if (input.parentNode) input.replaceWith(spanEl);
+      if (commit && newValue && newValue !== currentValue) {
+        await refreshLibrary();
+      }
+    }
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener('blur', () => finish(true));
+}
+
+// ---------------- 컨텍스트 메뉴 ----------------
+
+let contextTarget = null;
+
+function showContextMenu(x, y, target) {
+  contextTarget = target;
+  const moveBtn = contextMenuEl.querySelector('button[data-action="move"]');
+  if (moveBtn) moveBtn.style.display = target.kind === 'paper' ? '' : 'none';
+  contextMenuEl.hidden = false;
+  // 위치
+  contextMenuEl.style.left = x + 'px';
+  contextMenuEl.style.top = y + 'px';
+  // 화면 밖 보정
+  const rect = contextMenuEl.getBoundingClientRect();
+  if (rect.right > window.innerWidth) {
+    contextMenuEl.style.left = (window.innerWidth - rect.width - 8) + 'px';
+  }
+  if (rect.bottom > window.innerHeight) {
+    contextMenuEl.style.top = (window.innerHeight - rect.height - 8) + 'px';
+  }
+}
+
+function hideContextMenu() {
+  contextMenuEl.hidden = true;
+  contextTarget = null;
+}
+
+document.addEventListener('click', (e) => {
+  if (contextMenuEl.hidden) return;
+  if (!contextMenuEl.contains(e.target)) hideContextMenu();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !contextMenuEl.hidden) hideContextMenu();
+});
+
+contextMenuEl.querySelectorAll('button').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const action = btn.dataset.action;
+    const target = contextTarget;
+    hideContextMenu();
+    if (!target) return;
+    if (action === 'rename') {
+      const selector = target.kind === 'folder'
+        ? `.folder-head[data-folder-id="${target.id}"] .folder-name`
+        : `.paper-item[data-paper-id="${target.id}"] .paper-title`;
+      const el = libraryTreeEl.querySelector(selector);
+      if (el) {
+        beginRename(el, target.name || '', async (newName) => {
+          if (target.kind === 'folder') await patchFolder(target.id, { name: newName });
+          else await patchPaper(target.id, { title: newName });
+        });
+      }
+    } else if (action === 'move' && target.kind === 'paper') {
+      openFolderPicker(target.id);
+    } else if (action === 'delete') {
+      const label = target.name || (target.kind === 'folder' ? '폴더' : '논문');
+      if (!confirm(`정말 "${label}" 을(를) 삭제하시겠습니까?`)) return;
+      try {
+        const url = target.kind === 'folder'
+          ? `/api/library/folders/${target.id}`
+          : `/api/library/papers/${target.id}`;
+        const res = await fetch(url, { method: 'DELETE' });
+        if (!res.ok) {
+          setComposerHint(`삭제 실패 (${res.status})`, true);
+          return;
+        }
+        if (target.kind === 'paper' && target.id === state.currentPaperId) {
+          startNewAnalysis();
+        }
+        await refreshLibrary();
+      } catch (err) {
+        setComposerHint(`삭제 실패: ${err.message}`, true);
+      }
+    }
+  });
+});
+
+async function patchFolder(id, body) {
+  const res = await fetch(`/api/library/folders/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`서버 오류 (${res.status})`);
+  return await res.json();
+}
+async function patchPaper(id, body) {
+  const res = await fetch(`/api/library/papers/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`서버 오류 (${res.status})`);
+  return await res.json();
+}
+
+// ---------------- 폴더 picker ----------------
+
+let folderPickerPaperId = null;
+
+function openFolderPicker(paperId) {
+  folderPickerPaperId = paperId;
+  folderPickerListEl.innerHTML = '';
+  const folders = (state.libraryTree && state.libraryTree.folders) || [];
+  if (folders.length === 0) {
+    const li = document.createElement('li');
+    li.className = 'empty';
+    li.textContent = '(폴더가 없습니다 — 좌측 "+ 새 폴더"로 만드세요)';
+    folderPickerListEl.appendChild(li);
+  } else {
+    for (const f of folders) {
+      const li = document.createElement('li');
+      li.textContent = `📁 ${f.name}`;
+      li.addEventListener('click', async () => {
+        await movePaperToFolder(paperId, f.id);
+        closeFolderPicker();
+      });
+      folderPickerListEl.appendChild(li);
+    }
+  }
+  folderPickerEl.hidden = false;
+}
+function closeFolderPicker() {
+  folderPickerEl.hidden = true;
+  folderPickerPaperId = null;
+}
+folderPickerEl.querySelectorAll('[data-close]').forEach(el => {
+  el.addEventListener('click', closeFolderPicker);
+});
+folderPickerNullBtn.addEventListener('click', async () => {
+  if (folderPickerPaperId == null) return;
+  await movePaperToFolder(folderPickerPaperId, null);
+  closeFolderPicker();
+});
+
+async function movePaperToFolder(paperId, folderId) {
+  try {
+    await patchPaper(paperId, { folderId });
+    await refreshLibrary();
+  } catch (err) {
+    setComposerHint(`이동 실패: ${err.message}`, true);
+  }
+}
+
+// ---------------- 새 폴더 ----------------
+
+// Electron 렌더러(sandbox)에선 window.prompt 가 막혀있어, 기본 이름으로 만든 뒤
+// 바로 인라인 리네임 모드로 들어가 사용자가 그 자리에서 이름 입력하도록 한다.
+newFolderBtn.addEventListener('click', async () => {
+  const defaultName = '새 폴더';
+  try {
+    const res = await fetch('/api/library/folders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: defaultName }),
+    });
+    if (!res.ok) {
+      setComposerHint(`폴더 생성 실패 (${res.status})`, true);
+      return;
+    }
+    const created = await res.json().catch(() => null);
+    await refreshLibrary();
+    const newId = created && created.id;
+    if (newId != null) {
+      const el = libraryTreeEl.querySelector(`.folder-head[data-folder-id="${newId}"] .folder-name`);
+      if (el) {
+        beginRename(el, defaultName, async (newName) => {
+          if (newName && newName !== defaultName) {
+            await patchFolder(newId, { name: newName });
+          }
+        });
+      }
+    }
+  } catch (err) {
+    setComposerHint(`폴더 생성 실패: ${err.message}`, true);
+  }
+});
+
+// ---------------- 라이브러리 전체 리셋 ----------------
+
+if (libraryResetBtn) {
+  libraryResetBtn.addEventListener('click', async () => {
+    if (!confirm('정말 라이브러리 전체를 초기화할까요? 모든 폴더/논문/분석/채팅이 영구 삭제됩니다.')) return;
+    if (!confirm('마지막 확인: 정말 모든 데이터를 삭제하시겠습니까? 되돌릴 수 없습니다.')) return;
+    try {
+      const res = await fetch('/api/library?confirm=yes', { method: 'DELETE' });
+      if (!res.ok) {
+        let msg = `초기화 실패 (${res.status})`;
+        try { const j = await res.json(); if (j.error) msg = j.error; } catch { /* ignore */ }
+        flashPromptsStatus(msg, true);
+        return;
+      }
+      // 리셋 성공 후 무조건 정리 (busy 무시, confirm 우회)
+      state.busy = false;
+      state.sessionId = null;
+      state.messages = [];
+      state.pendingPdf = null;
+      state.currentPaperId = null;
+      state.currentAnalysisId = null;
+      state.mode = 'new';
+      messagesEl.innerHTML = '';
+      clearAttachment();
+      composerInput.value = '';
+      autoGrow();
+      setComposerHint('');
+      newAnalysisBtn.classList.remove('highlight');
+      updateSendState();
+      await refreshLibrary();
+      closeSettings();
+    } catch (err) {
+      flashPromptsStatus(`초기화 실패: ${err.message}`, true);
+    }
+  });
+}
+
 // 초기 상태
 autoGrow();
 updateComposerMode();
 updateSendState();
 fetchAuthStatus();
+refreshLibrary();

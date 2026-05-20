@@ -10,6 +10,8 @@ import { run as runOrchestrator, EMPTY_DIRECTIVE } from './agents/orchestrator.j
 import { run as runFocusedAudit } from './agents/focusedAudit.js';
 import { getCurrent as getPrompts } from './core/promptStore.js';
 import { getConfig as getLlmConfig } from './core/llmConfig.js';
+import * as library from './core/library.js';
+import * as fileManager from './core/fileManager.js';
 import { writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
@@ -161,6 +163,75 @@ export async function runPipeline(pdfPath, onProgress = () => {}, options = {}) 
     meta: metrics.writer,
   });
 
+  const totalMs = (metrics.parse?.durationMs ?? 0)
+    + (metrics.orchestrator?.durationMs ?? 0)
+    + (metrics.analyst?.durationMs ?? 0)
+    + (metrics.verifier?.durationMs ?? 0)
+    + (metrics.audits?.durationMs ?? 0)
+    + (metrics.writer?.durationMs ?? 0);
+  metrics.totalMs = totalMs;
+
+  // ===== 영속화 (실패 시 rollback, 분석 결과는 그대로 반환) =====
+  let savedPaperId = null;
+  let savedAnalysisId = null;
+  const persistedPaperId = { value: null };
+  const persistedAnalysisId = { value: null };
+  try {
+    await library.init();
+    const sourceFile = options.sourceFile || path.basename(pdfPath);
+    const paperRow = await library.createPaper({
+      title: analystOut.title || parsed.title || '제목 없음',
+      authors: null,
+      year: null,
+      sourceFile,
+      folderId: null,
+    });
+    persistedPaperId.value = paperRow.id;
+
+    // PDF 영구 위치로 이동/복사
+    if (options.copyPdfMode) {
+      await fileManager.copyPdf(pdfPath, paperRow.id);
+    } else {
+      await fileManager.adoptPdf(pdfPath, paperRow.id);
+    }
+    await library.updatePaperPdfPath(paperRow.id, fileManager.paperSourcePath(paperRow.id));
+
+    const analysisRow = await library.createAnalysis({
+      paperId: paperRow.id,
+      durationMs: totalMs,
+      configSnapshot: JSON.stringify(options.llmConfigSnapshot || {}),
+      reportPath: 'placeholder',
+      metricsPath: 'placeholder',
+      claimsPath: 'placeholder',
+    });
+    persistedAnalysisId.value = analysisRow.id;
+
+    const actualPaths = await fileManager.writeAnalysisFiles(paperRow.id, analysisRow.id, {
+      reportMd: report,
+      claimsJson: verifiedClaims,
+      metricsJson: { ...metrics, directive, auditResults },
+    });
+    await library.updateAnalysisPaths(analysisRow.id, actualPaths);
+
+    // paperText 캐시 (chat 재파싱 제거용)
+    await fileManager.writePaperText(paperRow.id, paperText);
+
+    savedPaperId = paperRow.id;
+    savedAnalysisId = analysisRow.id;
+  } catch (e) {
+    console.error('[library] persist failed:', e);
+    if (persistedAnalysisId.value !== null) {
+      try { await library.deleteAnalysis(persistedAnalysisId.value); }
+      catch (e2) { console.error('[library] rollback analysis failed:', e2); }
+    }
+    if (persistedPaperId.value !== null) {
+      try { await library.deletePaper(persistedPaperId.value); }
+      catch (e2) { console.error('[library] rollback paper failed:', e2); }
+    }
+    savedPaperId = null;
+    savedAnalysisId = null;
+  }
+
   return {
     report,
     parsed,
@@ -172,6 +243,8 @@ export async function runPipeline(pdfPath, onProgress = () => {}, options = {}) 
     metrics,
     directive,
     auditResults,
+    paperId: savedPaperId,
+    analysisId: savedAnalysisId,
   };
 }
 
@@ -179,22 +252,27 @@ export async function runPipeline(pdfPath, onProgress = () => {}, options = {}) 
 if (path.basename(process.argv[1] ?? '') === 'pipeline.js') {
   const pdfPath = process.argv[2];
   if (!pdfPath) {
-    console.error('사용법: node pipeline.js <pdfPath>');
+    console.error('Usage: node pipeline.js <pdfPath>');
     process.exit(1);
   }
   try {
-    const { report, sessionId, stats, metrics, directive, auditResults } = await runPipeline(pdfPath, p => console.log(p.message));
+    const { report, sessionId, stats, metrics, directive, auditResults, paperId, analysisId } = await runPipeline(
+      pdfPath,
+      p => console.log(p.message),
+      { sourceFile: path.basename(pdfPath), copyPdfMode: true, llmConfigSnapshot: getLlmConfig() },
+    );
     const outPath = path.resolve(path.dirname(pdfPath), 'report.md');
     await writeFile(outPath, report, 'utf8');
-    console.log(`저장 완료: ${outPath}`);
+    console.log(`Saved: ${outPath}`);
     console.log(`  - sessionId: ${sessionId}`);
-    console.log(`  - 검증 통계: supported ${stats.supported}, partial ${stats.partially_supported}, unsupported ${stats.unsupported}, contradicted ${stats.contradicted}`);
+    if (paperId != null) console.log(`  - library: paperId=${paperId}, analysisId=${analysisId}`);
+    console.log(`  - verification: supported ${stats.supported}, partial ${stats.partially_supported}, unsupported ${stats.unsupported}, contradicted ${stats.contradicted}`);
     if (directive && directive.interpretedEmphasis) {
-      console.log(`  - 오케스트레이터 해석: ${directive.interpretedEmphasis}`);
-      if (directive.extractionFocus) console.log(`      추출 focus: ${directive.extractionFocus}`);
-      if (directive.verificationFocus) console.log(`      검증 focus: ${directive.verificationFocus}`);
+      console.log(`  - orchestrator interpretation: ${directive.interpretedEmphasis}`);
+      if (directive.extractionFocus) console.log(`      extraction focus: ${directive.extractionFocus}`);
+      if (directive.verificationFocus) console.log(`      verification focus: ${directive.verificationFocus}`);
       if (auditResults && auditResults.length) {
-        console.log(`  - 감사 결과 (${auditResults.length}건):`);
+        console.log(`  - audit results (${auditResults.length}):`);
         for (const a of auditResults) {
           console.log(`      [${a.name}] ${a.verdict}`);
         }
@@ -206,13 +284,13 @@ if (path.basename(process.argv[1] ?? '') === 'pipeline.js') {
                   + (metrics.verifier?.durationMs ?? 0)
                   + (metrics.audits?.durationMs ?? 0)
                   + (metrics.writer?.durationMs ?? 0);
-    console.log('  - 단계별 메트릭:');
-    console.log(`      분석가  ${Math.round((metrics.analyst.durationMs || 0) / 1000)}s · in ${metrics.analyst.usage?.input_tokens || 0} / out ${metrics.analyst.usage?.output_tokens || 0}`);
-    console.log(`      검증가  ${Math.round((metrics.verifier.durationMs || 0) / 1000)}s · ${metrics.verifier.calls || 0}회 호출 · in ${metrics.verifier.totalInputTokens || 0} / out ${metrics.verifier.totalOutputTokens || 0}`);
-    console.log(`      작가    ${Math.round((metrics.writer.durationMs || 0) / 1000)}s · in ${metrics.writer.usage?.input_tokens || 0} / out ${metrics.writer.usage?.output_tokens || 0}`);
-    console.log(`      합계    ${Math.round(totalMs / 1000)}s`);
+    console.log('  - stage metrics:');
+    console.log(`      analyst   ${Math.round((metrics.analyst.durationMs || 0) / 1000)}s . in ${metrics.analyst.usage?.input_tokens || 0} / out ${metrics.analyst.usage?.output_tokens || 0}`);
+    console.log(`      verifier  ${Math.round((metrics.verifier.durationMs || 0) / 1000)}s . ${metrics.verifier.calls || 0} calls . in ${metrics.verifier.totalInputTokens || 0} / out ${metrics.verifier.totalOutputTokens || 0}`);
+    console.log(`      writer    ${Math.round((metrics.writer.durationMs || 0) / 1000)}s . in ${metrics.writer.usage?.input_tokens || 0} / out ${metrics.writer.usage?.output_tokens || 0}`);
+    console.log(`      total     ${Math.round(totalMs / 1000)}s`);
   } catch (err) {
-    console.error('실패:', err.message);
+    console.error('Failed:', err.message);
     process.exit(1);
   }
 }

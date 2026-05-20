@@ -14,7 +14,7 @@ const SCHEMA_HINT = `{
 export async function run({ paperText, prompts, emphasis, extractionFocus, llm = {}, onMeta }) {
   let text = paperText;
   if (text.length > ANALYST_MAX_CHARS) {
-    console.warn(`[analyst] paperText ${text.length}자 → ${ANALYST_MAX_CHARS}자로 절단됨`);
+    console.warn(`[analyst] paperText ${text.length} chars -> truncated to ${ANALYST_MAX_CHARS}`);
     text = text.slice(0, ANALYST_MAX_CHARS);
   }
   const focusBlock = extractionFocus && extractionFocus.trim()

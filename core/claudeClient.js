@@ -54,6 +54,7 @@ export async function callClaude(prompt, opts = {}) {
       const proc = spawn(command, [], {
         shell: true,
         stdio: ['ignore', 'pipe', 'pipe'],
+        cwd: tempDir,
       });
 
       proc.stdout.setEncoding('utf8');

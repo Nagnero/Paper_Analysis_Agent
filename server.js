@@ -15,6 +15,9 @@ import { callLLM } from './core/llm.js';
 import { getCurrent as getPrompts, setCurrent as setPrompts, loadDefaults as loadDefaultPrompts } from './core/promptStore.js';
 import * as llmConfig from './core/llmConfig.js';
 import * as authStatus from './core/authStatus.js';
+import * as library from './core/library.js';
+import * as fileManager from './core/fileManager.js';
+import { parsePdf } from './utils/parsePdf.js';
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 const SESSION_TTL_MS = 60 * 60 * 1000;
@@ -51,7 +54,7 @@ function startSse(res) {
   });
 }
 
-async function runAndStream(pdfPath, res, emphasis) {
+async function runAndStream(pdfPath, res, emphasis, sourceFile, { copyPdfMode = false } = {}) {
   try {
     const auth = await authStatus.checkAll();
     llmConfig.applyAvailability(auth);
@@ -61,8 +64,8 @@ async function runAndStream(pdfPath, res, emphasis) {
       sseWrite(res, { stage: 'error', message: `분석 실패: ${missing}에 로그인이 필요합니다. 설정에서 다른 백엔드로 바꾸거나 로그인하세요.` });
       return;
     }
-    const { report, parsed, sessionId, paperText, analyst, verifiedClaims, metrics, directive, auditResults } =
-      await runPipeline(pdfPath, p => sseWrite(res, p), { emphasis });
+    const { report, parsed, sessionId, paperText, analyst, verifiedClaims, metrics, directive, auditResults, paperId, analysisId } =
+      await runPipeline(pdfPath, p => sseWrite(res, p), { emphasis, sourceFile, copyPdfMode, llmConfigSnapshot: llmConfig.getConfig() });
     gcSessions();
     sessions.set(sessionId, {
       createdAt: new Date(),
@@ -71,7 +74,7 @@ async function runAndStream(pdfPath, res, emphasis) {
       report,
       chatStartedByBackend: { claude: false, codex: false },
     });
-    sseWrite(res, { stage: 'done', message: '완료', report, sessionId, analyst, verifiedClaims, metrics, directive, auditResults });
+    sseWrite(res, { stage: 'done', message: '완료', report, sessionId, analyst, verifiedClaims, metrics, directive, auditResults, paperId, analysisId });
   } catch (err) {
     sseWrite(res, { stage: 'error', message: `실패: ${err.message}` });
   }
@@ -102,6 +105,195 @@ function missingLoginBackend(authResult, backends) {
   return null;
 }
 
+// === 라이브러리 API ===
+
+function jsonResponse(res, status, payload) {
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify(payload));
+}
+
+async function readJsonBody(req) {
+  let body = '';
+  req.setEncoding('utf8');
+  for await (const chunk of req) body += chunk;
+  if (!body) return {};
+  return JSON.parse(body);
+}
+
+async function handleLibraryTree(req, res) {
+  try {
+    const tree = await library.getTree();
+    jsonResponse(res, 200, tree);
+  } catch (err) {
+    jsonResponse(res, 500, { error: err.message });
+  }
+}
+
+async function handleLibraryCreateFolder(req, res) {
+  try {
+    const body = await readJsonBody(req);
+    const name = typeof body.name === 'string' ? body.name.trim() : '';
+    if (!name) return jsonResponse(res, 400, { error: 'name required' });
+    const row = await library.createFolder(name);
+    jsonResponse(res, 200, row);
+  } catch (err) {
+    jsonResponse(res, 500, { error: err.message });
+  }
+}
+
+async function handleLibraryUpdateFolder(req, res, id) {
+  try {
+    const body = await readJsonBody(req);
+    const fields = {};
+    if (typeof body.name === 'string') fields.name = body.name.trim();
+    if (typeof body.sort_order === 'number') fields.sort_order = body.sort_order;
+    const row = await library.updateFolder(id, fields);
+    if (!row) return jsonResponse(res, 404, { error: 'folder not found' });
+    jsonResponse(res, 200, row);
+  } catch (err) {
+    jsonResponse(res, 500, { error: err.message });
+  }
+}
+
+async function handleLibraryDeleteFolder(req, res, id) {
+  try {
+    const ok = await library.deleteFolder(id);
+    if (!ok) return jsonResponse(res, 404, { error: 'folder not found' });
+    jsonResponse(res, 200, { ok: true });
+  } catch (err) {
+    jsonResponse(res, 500, { error: err.message });
+  }
+}
+
+async function handleLibraryGetPaper(req, res, id) {
+  try {
+    const paper = await library.getPaper(id);
+    if (!paper) return jsonResponse(res, 404, { error: 'paper not found' });
+    const latest = await library.getLatestAnalysis(paper.id);
+    let analysis = null;
+    let chats = [];
+    if (latest) {
+      const files = await fileManager.readAnalysisFiles(paper.id, latest.id);
+      analysis = {
+        id: latest.id,
+        created_at: latest.created_at,
+        duration_ms: latest.duration_ms,
+        config_snapshot: latest.config_snapshot,
+        report: files.report,
+        claims: files.claims,
+        metrics: files.metrics,
+        directive: files.metrics?.directive ?? null,
+        auditResults: files.metrics?.auditResults ?? [],
+      };
+      chats = await library.listChats(latest.id);
+    }
+    jsonResponse(res, 200, { paper, analysis, chats });
+  } catch (err) {
+    jsonResponse(res, 500, { error: err.message });
+  }
+}
+
+async function handleLibraryUpdatePaper(req, res, id) {
+  try {
+    const body = await readJsonBody(req);
+    const fields = {};
+    if (typeof body.title === 'string') fields.title = body.title.trim();
+    if ('folderId' in body) {
+      const f = body.folderId;
+      fields.folderId = (f == null) ? null : Number(f);
+    }
+    const row = await library.updatePaper(id, fields);
+    if (!row) return jsonResponse(res, 404, { error: 'paper not found' });
+    jsonResponse(res, 200, row);
+  } catch (err) {
+    jsonResponse(res, 500, { error: err.message });
+  }
+}
+
+async function handleLibraryReset(req, res) {
+  const url = new URL(req.url, 'http://x');
+  if (url.searchParams.get('confirm') !== 'yes') {
+    return jsonResponse(res, 400, { error: '?confirm=yes 필요' });
+  }
+  try {
+    await library.deleteAll();
+    await fileManager.deleteAllPapers();
+    jsonResponse(res, 200, { ok: true });
+  } catch (e) {
+    jsonResponse(res, 500, { error: e.message });
+  }
+}
+
+async function handleLibraryDeletePaper(req, res, id) {
+  try {
+    const ok = await library.deletePaper(id);
+    if (!ok) return jsonResponse(res, 404, { error: 'paper not found' });
+    jsonResponse(res, 200, { ok: true });
+  } catch (err) {
+    jsonResponse(res, 500, { error: err.message });
+  }
+}
+
+async function handleLibraryPaperChat(req, res, paperId) {
+  try {
+    const body = await readJsonBody(req);
+    const question = typeof body.question === 'string' ? body.question : '';
+    if (!question.trim()) return jsonResponse(res, 400, { error: 'question required' });
+    if (question.length > 8000) return jsonResponse(res, 413, { error: '질문이 너무 깁니다 (최대 8000자).' });
+
+    const paper = await library.getPaper(paperId);
+    if (!paper) return jsonResponse(res, 404, { error: 'paper not found' });
+    const latest = await library.getLatestAnalysis(paper.id);
+    if (!latest) return jsonResponse(res, 400, { error: '저장된 분석이 없습니다.' });
+
+    // 인증 게이트
+    const auth = await authStatus.checkAll();
+    llmConfig.applyAvailability(auth);
+    const chatCfg = llmConfig.getRole('chat');
+    const chatEntry = auth[chatCfg.backend];
+    if (!chatEntry || !chatEntry.loggedIn) {
+      return jsonResponse(res, 401, { error: `${chatCfg.backend}에 로그인이 필요합니다. 설정에서 다른 백엔드로 바꾸거나 로그인하세요.` });
+    }
+
+    // paperText 캐시 우선, 없으면 PDF 재파싱 fallback
+    let paperText = await fileManager.readPaperText(paper.id);
+    if (!paperText) {
+      const pdfPath = paper.pdf_path || fileManager.paperSourcePath(paper.id);
+      const parsed = await parsePdf(pdfPath);
+      paperText = parsed.fullText;
+      await fileManager.writePaperText(paper.id, paperText).catch(() => {});
+    }
+    const files = await fileManager.readAnalysisFiles(paper.id, latest.id);
+
+    const promptText = `다음 영어 논문과 한국어 분석 리포트를 참고해 사용자 질문에 답하세요.
+
+## 논문 원문 (요약본)
+${paperText ?? ''}
+
+## 한국어 분석 리포트
+${files.report ?? ''}
+
+--- 위는 컨텍스트 ---
+
+사용자 질문: ${question}`;
+
+    const callOpts = {
+      backend: chatCfg.backend,
+      model: chatCfg.model,
+      reasoningEffort: chatCfg.reasoningEffort,
+      timeoutMs: 600_000,
+    };
+    const answer = await callLLM(promptText, callOpts);
+
+    const modelTag = `${chatCfg.backend}${chatCfg.model ? '/' + chatCfg.model : ''}`;
+    const { user: userRow, assistant: assistantRow } = await library.appendChatTurn(latest.id, question, answer, modelTag);
+    jsonResponse(res, 200, { answer, chats: [userRow, assistantRow] });
+  } catch (err) {
+    jsonResponse(res, 500, { error: err.message });
+  }
+}
+
+// === /chat (deprecated v0.3 — 사이드바 UI로 이전 후 제거 예정) ===
 async function handleChat(req, res) {
   let body = '';
   req.setEncoding('utf8');
@@ -218,7 +410,8 @@ async function handleJsonAnalyze(req, res) {
   }
 
   startSse(res);
-  await runAndStream(pdfPath, res, emphasis);
+  // JSON 모드: 사용자가 경로를 직접 지정 — 원본 보존을 위해 copy
+  await runAndStream(pdfPath, res, emphasis, path.basename(pdfPath), { copyPdfMode: true });
   res.end();
 }
 
@@ -312,7 +505,7 @@ async function handleRawAnalyze(req, res) {
       sseWrite(res, { stage: 'error', message: err.message });
       return;
     }
-    await runAndStream(tempPath, res, emphasis);
+    await runAndStream(tempPath, res, emphasis, filename);
   } finally {
     await rm(tempDir, { recursive: true, force: true }).catch(() => {});
     res.end();
@@ -541,12 +734,35 @@ async function handleStatic(req, res) {
   }
 }
 
+// /api/library/papers/:id, /:id/chat, /api/library/folders/:id 매칭
+function matchLibraryRoute(method, url) {
+  const m = url.match(/^\/api\/library\/(folders|papers)\/(\d+)(\/chat)?$/);
+  if (!m) return null;
+  return { kind: m[1], id: Number(m[2]), sub: m[3] || '', method };
+}
+
 function createAppServer() {
   return http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/analyze') {
       handleAnalyze(req, res);
     } else if (req.method === 'POST' && req.url === '/chat') {
       handleChat(req, res);
+    } else if (req.method === 'GET' && req.url === '/api/library/tree') {
+      handleLibraryTree(req, res);
+    } else if (req.method === 'DELETE' && req.url && (req.url === '/api/library' || req.url.startsWith('/api/library?'))) {
+      handleLibraryReset(req, res);
+    } else if (req.method === 'POST' && req.url === '/api/library/folders') {
+      handleLibraryCreateFolder(req, res);
+    } else if (req.url && req.url.startsWith('/api/library/')) {
+      const m = matchLibraryRoute(req.method, req.url);
+      if (!m) { res.writeHead(404); res.end(); return; }
+      if (m.kind === 'folders' && m.method === 'PATCH') return handleLibraryUpdateFolder(req, res, m.id);
+      if (m.kind === 'folders' && m.method === 'DELETE') return handleLibraryDeleteFolder(req, res, m.id);
+      if (m.kind === 'papers' && m.sub === '/chat' && m.method === 'POST') return handleLibraryPaperChat(req, res, m.id);
+      if (m.kind === 'papers' && m.method === 'GET') return handleLibraryGetPaper(req, res, m.id);
+      if (m.kind === 'papers' && m.method === 'PATCH') return handleLibraryUpdatePaper(req, res, m.id);
+      if (m.kind === 'papers' && m.method === 'DELETE') return handleLibraryDeletePaper(req, res, m.id);
+      res.writeHead(405); res.end();
     } else if (req.method === 'GET' && req.url === '/api/prompts') {
       handlePromptsGet(req, res);
     } else if (req.method === 'GET' && req.url === '/api/prompts/defaults') {
@@ -577,7 +793,9 @@ function createAppServer() {
 }
 
 // Electron(또는 다른 호스트)에서 import해서 호출. port=0 이면 OS가 빈 포트 할당.
-export function startServer({ host = HOST, port = PORT } = {}) {
+export async function startServer({ host = HOST, port = PORT } = {}) {
+  await library.init();
+  console.log(`[paa] library: ${library.getBackend()} (${fileManager.userDataDir()})`);
   return new Promise((resolve, reject) => {
     const server = createAppServer();
     server.once('error', reject);
@@ -592,9 +810,9 @@ export function startServer({ host = HOST, port = PORT } = {}) {
 const isMain = path.basename(process.argv[1] ?? '') === 'server.js';
 if (isMain) {
   startServer().then(({ host, port }) => {
-    console.log(`▶ http://${host}:${port} 에서 열어주세요`);
+    console.log(`[paa] listening on http://${host}:${port}`);
   }).catch(err => {
-    console.error('서버 시작 실패:', err.message);
+    console.error('[paa] server start failed:', err.message);
     process.exit(1);
   });
 }
