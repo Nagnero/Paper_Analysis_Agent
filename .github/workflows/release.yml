@@ -22,25 +22,39 @@ jobs:
         include:
           - os: windows-latest
             build: npx electron-builder --win --x64 --publish never
-            pattern: dist/PAA-*.exe
           - os: macos-latest
             build: npx electron-builder --mac dmg --x64 --arm64 --publish never
-            pattern: dist/PAA-*.dmg
     runs-on: ${{ matrix.os }}
     steps:
-      - name: Resolve build ref
+      - name: Resolve build ref and version
         id: ref
         shell: bash
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "ref=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+            TAG="${{ inputs.tag }}"
           else
-            echo "ref=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            TAG="${{ github.ref_name }}"
           fi
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag '$TAG' does not match vMAJOR.MINOR.PATCH"
+            exit 1
+          fi
+          echo "ref=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v4
         with:
           ref: ${{ steps.ref.outputs.ref }}
+
+      - name: Verify package.json version matches tag
+        shell: bash
+        run: |
+          PKG_VER=$(node -p "require('./package.json').version")
+          EXPECTED="${{ steps.ref.outputs.version }}"
+          if [ "$PKG_VER" != "$EXPECTED" ]; then
+            echo "::error::package.json version ($PKG_VER) != tag version ($EXPECTED)"
+            exit 1
+          fi
 
       - uses: actions/setup-node@v4
         with:
@@ -58,8 +72,24 @@ jobs:
         shell: bash
         run: ls -lh dist
 
-      - name: Upload to GitHub release
+      # OS 별로 업로드 스텝을 분리 + 글로브에 버전을 박아 다른 버전의 잔여 산출물이
+      # 같은 release 에 올라가지 못하게 한다. fail_on_unmatched_files 로 산출물 누락도 즉시 잡힘.
+      - name: Upload Windows artifacts
+        if: matrix.os == 'windows-latest'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ref.outputs.ref }}
-          files: ${{ matrix.pattern }}
+          fail_on_unmatched_files: true
+          files: |
+            dist/PAA-${{ steps.ref.outputs.version }}.exe
+            dist/PAA-${{ steps.ref.outputs.version }}-setup.exe
+
+      - name: Upload macOS artifacts
+        if: matrix.os == 'macos-latest'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ref.outputs.ref }}
+          fail_on_unmatched_files: true
+          files: |
+            dist/PAA-${{ steps.ref.outputs.version }}-arm64.dmg
+            dist/PAA-${{ steps.ref.outputs.version }}-x64.dmg
