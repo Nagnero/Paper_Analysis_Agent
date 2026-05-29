@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Korean Paper Agent Console</title>
+  <link rel="stylesheet" href="/vendor/pdfjs/pdf_viewer.css">
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
@@ -25,7 +26,10 @@
     <div id="mainArea">
       <header class="top">
         <div class="top-inner">
-          <div class="brand">Korean Paper Agent Console <span class="ver">v0.3.0</span></div>
+          <div class="brand">Korean Paper Agent Console <span class="ver">v0.4.0</span></div>
+          <div class="top-actions">
+            <button type="button" id="pdfToggleBtn" class="pdf-toggle" title="논문 보기/숨기기" hidden>📄 논문</button>
+          </div>
         </div>
       </header>
 
@@ -35,9 +39,11 @@
         <button type="button" id="authBannerHelpBtn" class="btn-secondary">로그인 방법</button>
       </div>
 
-      <main class="chat-main">
-        <div id="messages" class="messages" aria-live="polite"></div>
-      </main>
+      <div id="workspace">
+        <section id="chatPane">
+          <main class="chat-main">
+            <div id="messages" class="messages" aria-live="polite"></div>
+          </main>
 
       <footer class="composer">
         <div class="composer-inner">
@@ -60,6 +66,18 @@
           </div>
         </div>
       </footer>
+        </section>
+        <div id="paneResizer" class="pane-resizer" hidden></div>
+        <aside id="pdfPane" class="pdf-pane" hidden>
+          <div class="pdf-pane-head">
+            <span id="pdfTitle" class="pdf-title">논문</span>
+            <span class="spacer"></span>
+            <a id="pdfOpenExternal" class="pdf-head-btn" href="#" target="_blank" rel="noopener" title="새 창에서 열기">↗</a>
+            <button type="button" id="pdfCloseBtn" class="pdf-head-btn" title="패널 닫기" aria-label="패널 닫기">×</button>
+          </div>
+          <div id="pdfBody" class="pdf-pane-body"></div>
+        </aside>
+      </div>
     </div>
   </div>
 

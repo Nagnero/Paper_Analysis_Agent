@@ -1,6 +1,7 @@
 // 채팅 UI 메인 스크립트 (ESM).
 // markdown 렌더러는 백엔드 정적 라우트 화이트리스트가 /markdown.js를 포함하지 않아
 // 별도 파일로 import할 수 없어 이 파일에 inline으로 포함.
+import { createPdfViewer } from '/pdfViewer.js';
 
 // ---------------- Markdown 렌더러 ----------------
 
@@ -205,6 +206,179 @@ const authBlocker = $('authBlocker');
 const authBlockerRefreshBtn = $('authBlockerRefreshBtn');
 const authBlockerCloseBtn = $('authBlockerCloseBtn');
 const authBlockerStatus = $('authBlockerStatus');
+
+// ---------------- 논문 PDF 패널 (우측, PDF.js 제어형) ----------------
+const workspaceEl = $('workspace');
+const pdfPane = $('pdfPane');
+const pdfBody = $('pdfBody');
+const pdfToggleBtn = $('pdfToggleBtn');
+const pdfCloseBtn = $('pdfCloseBtn');
+const paneResizer = $('paneResizer');
+const pdfTitleEl = $('pdfTitle');
+const pdfOpenExternal = $('pdfOpenExternal');
+const PDF_WIDTH_KEY = 'paa.pdfPaneWidth';
+
+const pdfViewer = pdfBody ? createPdfViewer(pdfBody) : null;
+
+const pdfState = {
+  blobUrl: '',      // 외부 링크용 blob URL (해제 대상)
+  paperId: null,    // 현재 로드된 논문 id (저장본일 때)
+  available: false, // 표시할 PDF가 있는지
+  open: false,      // 패널이 펼쳐져 있는지
+};
+
+function revokePdfBlob() {
+  if (pdfState.blobUrl) {
+    URL.revokeObjectURL(pdfState.blobUrl);
+    pdfState.blobUrl = '';
+  }
+}
+
+function setPdfTitle(title) {
+  if (title != null && pdfTitleEl) {
+    pdfTitleEl.textContent = title;
+    pdfTitleEl.title = title;
+  }
+}
+
+function applyPdfLayout() {
+  const show = pdfState.available && pdfState.open;
+  if (pdfPane) pdfPane.hidden = !show;
+  if (paneResizer) paneResizer.hidden = !show;
+  if (pdfToggleBtn) {
+    pdfToggleBtn.hidden = !pdfState.available;
+    pdfToggleBtn.classList.toggle('active', show);
+  }
+}
+
+function clampPdfWidth(px) {
+  const total = workspaceEl ? workspaceEl.clientWidth : window.innerWidth;
+  const min = 280;
+  const max = Math.max(min, total - 360); // 채팅 영역 최소 360px 보장
+  return Math.min(Math.max(px, min), max);
+}
+
+function setPdfWidth(px) {
+  if (pdfPane) pdfPane.style.width = clampPdfWidth(px) + 'px';
+}
+
+// 저장된 논문 PDF를 서버에서 로드. title 생략 시 기존 제목 유지.
+function showPaperPdf(paperId, title) {
+  if (!pdfViewer) return;
+  revokePdfBlob();
+  setPdfTitle(title);
+  const url = `/api/library/papers/${paperId}/pdf`;
+  if (pdfOpenExternal) pdfOpenExternal.href = url;
+  pdfState.paperId = paperId;
+  pdfState.available = true;
+  pdfState.open = true;
+  applyPdfLayout();
+  // 같은 논문을 다시 열면 재로드 생략(깜빡임 방지)
+  if (pdfViewer.currentPaperId !== paperId) {
+    pdfViewer.currentPaperId = paperId;
+    pdfViewer.load(url).catch(err => console.warn('PDF 로드 실패', err));
+  }
+}
+
+// 업로드 중인 로컬 파일 즉시 미리보기.
+function showLocalPdf(file) {
+  if (!pdfViewer) return;
+  revokePdfBlob();
+  setPdfTitle(file.name || '논문');
+  pdfState.blobUrl = URL.createObjectURL(file);
+  if (pdfOpenExternal) pdfOpenExternal.href = pdfState.blobUrl;
+  pdfState.paperId = null;
+  pdfViewer.currentPaperId = null;
+  pdfState.available = true;
+  pdfState.open = true;
+  applyPdfLayout();
+  file.arrayBuffer()
+    .then(buf => pdfViewer.load({ data: buf }))
+    .catch(err => console.warn('로컬 PDF 미리보기 실패', err));
+}
+
+// 표시할 PDF 없음 (새 분석 초기 상태 등).
+function clearPdf() {
+  if (!pdfViewer) return;
+  revokePdfBlob();
+  pdfViewer.currentPaperId = null;
+  pdfViewer.destroy();
+  pdfState.paperId = null;
+  pdfState.available = false;
+  pdfState.open = false;
+  applyPdfLayout();
+}
+
+function togglePdfPane() {
+  if (!pdfState.available) return;
+  pdfState.open = !pdfState.open;
+  applyPdfLayout();
+}
+
+// claim 근거 클릭 → PDF에서 해당 인용문으로 점프 + 하이라이트
+function onEvidenceClick(quote, v) {
+  if (!pdfViewer || !pdfState.available) {
+    showToast('논문 PDF를 먼저 열어주세요');
+    return;
+  }
+  pdfState.open = true;
+  applyPdfLayout();
+  const r = pdfViewer.highlightQuote(quote, {
+    sourcePage: v?.claim?.sourcePage,
+    sourceSection: v?.evidenceSection ?? v?.claim?.sourceSection,
+  });
+  if (!r.found) showToast('논문에서 해당 근거 위치를 찾지 못했습니다');
+}
+
+let toastTimer = 0;
+function showToast(text) {
+  let el = $('toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'toast';
+    el.className = 'toast';
+    document.body.appendChild(el);
+  }
+  el.textContent = text;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
+}
+
+if (pdfToggleBtn) pdfToggleBtn.addEventListener('click', togglePdfPane);
+if (pdfCloseBtn) pdfCloseBtn.addEventListener('click', () => { pdfState.open = false; applyPdfLayout(); });
+
+if (paneResizer) {
+  paneResizer.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = pdfPane.getBoundingClientRect().width;
+    document.body.classList.add('resizing');
+    const onMove = (ev) => setPdfWidth(startW + (startX - ev.clientX)); // 좌로 끌면 넓어짐
+    const onUp = () => {
+      document.body.classList.remove('resizing');
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      try { localStorage.setItem(PDF_WIDTH_KEY, String(Math.round(pdfPane.getBoundingClientRect().width))); } catch { /* ignore */ }
+      if (pdfViewer) pdfViewer.relayout();
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  });
+}
+
+let resizeTimer = 0;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { if (pdfViewer && pdfState.available && pdfState.open) pdfViewer.relayout(); }, 250);
+});
+
+// 저장된 패널 폭 복원
+(function initPdfWidth() {
+  let saved = 0;
+  try { saved = Number(localStorage.getItem(PDF_WIDTH_KEY)) || 0; } catch { /* ignore */ }
+  if (saved > 0 && pdfPane) pdfPane.style.width = saved + 'px';
+})();
 
 const CLAUDE_MODELS = [
   { value: 'claude-opus-4-8', label: 'Opus 4.8 (기본값, 최고 성능)' },
@@ -516,12 +690,26 @@ function buildStatsDetail(metrics, verifiedClaims, auditResults) {
     table.className = 'claims-table';
     table.innerHTML = '<thead><tr><th>상태</th><th>주장</th><th>근거</th><th>섹션</th></tr></thead><tbody></tbody>';
     const tbody = table.querySelector('tbody');
+    let refNo = 0;
     for (const v of verifiedClaims) {
       const tr = document.createElement('tr');
       tr.className = `claim-row claim-${v.status}`;
       const tdS = document.createElement('td'); tdS.textContent = STATUS_LABEL[v.status] ?? v.status;
       const tdC = document.createElement('td'); tdC.textContent = v.claim?.text ?? '';
-      const tdE = document.createElement('td'); tdE.textContent = v.evidenceQuote ?? '';
+      const tdE = document.createElement('td');
+      const quote = v.evidenceQuote ?? '';
+      if (quote) {
+        refNo += 1;
+        // 근거를 클릭형 레퍼런스로: 누르면 PDF에서 위치로 점프 + 하이라이트
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'evidence-ref';
+        btn.title = '논문에서 이 근거 위치로 이동';
+        btn.innerHTML = `<span class="ref-num">[${refNo}]</span><span class="ref-quote">${escapeHtml(quote)}</span><span class="ref-loupe">🔎</span>`;
+        const vRef = v;
+        btn.addEventListener('click', () => onEvidenceClick(quote, vRef));
+        tdE.appendChild(btn);
+      }
       const tdSec = document.createElement('td'); tdSec.textContent = v.evidenceSection ?? v.claim?.sourceSection ?? '';
       tr.append(tdS, tdC, tdE, tdSec);
       tbody.appendChild(tr);
@@ -637,6 +825,7 @@ function setAttachment(file) {
   attachSize.textContent = fmtBytes(file.size);
   attachmentChip.hidden = false;
   setComposerHint('');
+  showLocalPdf(file); // 우측 패널에 즉시 미리보기
   updateComposerMode();
   updateSendState();
 }
@@ -769,6 +958,7 @@ function handleSseEvent(payload, msgId) {
       state.currentPaperId = payload.paperId;
       state.currentAnalysisId = payload.analysisId;
       state.mode = 'paper';
+      showPaperPdf(payload.paperId); // 로컬 blob → 저장된 서버 PDF로 전환 (제목 유지)
       refreshLibrary();
     }
     renderMsg(msg);
@@ -896,6 +1086,7 @@ function clearConversation() {
   state.mode = 'new';
   messagesEl.innerHTML = '';
   clearAttachment();
+  clearPdf();
   composerInput.value = '';
   autoGrow();
   setComposerHint('');
@@ -1080,7 +1271,11 @@ fileInput.addEventListener('change', () => {
     setAttachment(fileInput.files[0]);
   }
 });
-attachClear.addEventListener('click', clearAttachment);
+attachClear.addEventListener('click', () => {
+  clearAttachment();
+  // 분석 시작 전 첨부를 취소하면 미리보기도 닫는다 (논문 열람 중에는 유지).
+  if (!state.busy && state.mode === 'new') clearPdf();
+});
 
 composerInput.addEventListener('input', () => {
   autoGrow();
@@ -1447,6 +1642,7 @@ async function openPaper(paperId) {
         addMessage({ id: uid(), role: 'assistant', kind: 'chat', status: 'done', text: c.content });
       }
     }
+    showPaperPdf(paper.id, paper.source_file || paper.title || '논문');
     updateComposerMode();
     updateSendState();
     renderSidebar();
@@ -1694,6 +1890,7 @@ if (libraryResetBtn) {
       state.mode = 'new';
       messagesEl.innerHTML = '';
       clearAttachment();
+      clearPdf();
       composerInput.value = '';
       autoGrow();
       setComposerHint('');

@@ -38,7 +38,18 @@ const STATIC = {
   '/': { file: 'public/index.html', type: 'text/html; charset=utf-8' },
   '/app.css': { file: 'public/app.css', type: 'text/css; charset=utf-8' },
   '/app.js': { file: 'public/app.js', type: 'application/javascript; charset=utf-8' },
+  '/pdfViewer.js': { file: 'public/pdfViewer.js', type: 'application/javascript; charset=utf-8' },
   '/setup': { file: 'public/setup.html', type: 'text/html; charset=utf-8' },
+};
+
+// /vendor/* 정적 서빙 (PDF.js 번들 등). 확장자별 MIME + 경로 탐색 차단.
+const VENDOR_DIR = path.join(__dirname, 'public', 'vendor');
+const VENDOR_TYPES = {
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.map': 'application/json; charset=utf-8',
+  '.wasm': 'application/wasm',
 };
 
 function sseWrite(res, payload) {
@@ -188,6 +199,32 @@ async function handleLibraryGetPaper(req, res, id) {
       chats = await library.listChats(latest.id);
     }
     jsonResponse(res, 200, { paper, analysis, chats });
+  } catch (err) {
+    jsonResponse(res, 500, { error: err.message });
+  }
+}
+
+async function handleLibraryGetPaperPdf(req, res, id) {
+  try {
+    const paper = await library.getPaper(id);
+    if (!paper) return jsonResponse(res, 404, { error: 'paper not found' });
+    // 경로는 숫자 id에서만 파생되므로 경로 탐색(traversal) 위험이 없다.
+    const pdfPath = fileManager.paperSourcePath(paper.id);
+    let stat;
+    try {
+      stat = await fs.promises.stat(pdfPath);
+    } catch {
+      return jsonResponse(res, 404, { error: 'pdf not found' });
+    }
+    res.writeHead(200, {
+      'Content-Type': 'application/pdf',
+      'Content-Length': stat.size,
+      'Content-Disposition': `inline; filename="paper-${paper.id}.pdf"`,
+      'Cache-Control': 'no-cache',
+    });
+    const stream = fs.createReadStream(pdfPath);
+    stream.on('error', () => { if (!res.writableEnded) res.end(); });
+    stream.pipe(res);
   } catch (err) {
     jsonResponse(res, 500, { error: err.message });
   }
@@ -734,9 +771,33 @@ async function handleStatic(req, res) {
   }
 }
 
-// /api/library/papers/:id, /:id/chat, /api/library/folders/:id 매칭
+async function handleVendorStatic(req, res) {
+  let pathname;
+  try {
+    pathname = new URL(req.url || '/', 'http://127.0.0.1').pathname;
+  } catch {
+    res.writeHead(400); res.end('Bad Request'); return;
+  }
+  const rel = decodeURIComponent(pathname.replace(/^\/vendor\//, ''));
+  const filePath = path.join(VENDOR_DIR, rel);
+  // 경로 탐색 차단: 해석된 경로가 VENDOR_DIR 하위인지 확인.
+  if (!filePath.startsWith(VENDOR_DIR + path.sep)) {
+    res.writeHead(403); res.end('Forbidden'); return;
+  }
+  const type = VENDOR_TYPES[path.extname(filePath).toLowerCase()];
+  if (!type) { res.writeHead(404); res.end('Not Found'); return; }
+  try {
+    const data = await readFile(filePath);
+    res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'max-age=86400' });
+    res.end(data);
+  } catch {
+    res.writeHead(404); res.end('Not Found');
+  }
+}
+
+// /api/library/papers/:id, /:id/chat, /:id/pdf, /api/library/folders/:id 매칭
 function matchLibraryRoute(method, url) {
-  const m = url.match(/^\/api\/library\/(folders|papers)\/(\d+)(\/chat)?$/);
+  const m = url.match(/^\/api\/library\/(folders|papers)\/(\d+)(\/chat|\/pdf)?$/);
   if (!m) return null;
   return { kind: m[1], id: Number(m[2]), sub: m[3] || '', method };
 }
@@ -759,6 +820,7 @@ function createAppServer() {
       if (m.kind === 'folders' && m.method === 'PATCH') return handleLibraryUpdateFolder(req, res, m.id);
       if (m.kind === 'folders' && m.method === 'DELETE') return handleLibraryDeleteFolder(req, res, m.id);
       if (m.kind === 'papers' && m.sub === '/chat' && m.method === 'POST') return handleLibraryPaperChat(req, res, m.id);
+      if (m.kind === 'papers' && m.sub === '/pdf' && m.method === 'GET') return handleLibraryGetPaperPdf(req, res, m.id);
       if (m.kind === 'papers' && m.method === 'GET') return handleLibraryGetPaper(req, res, m.id);
       if (m.kind === 'papers' && m.method === 'PATCH') return handleLibraryUpdatePaper(req, res, m.id);
       if (m.kind === 'papers' && m.method === 'DELETE') return handleLibraryDeletePaper(req, res, m.id);
@@ -783,6 +845,8 @@ function createAppServer() {
       handleClaudeStatus(req, res);
     } else if (req.method === 'POST' && req.url === '/api/claude-login') {
       handleClaudeLogin(req, res);
+    } else if (req.method === 'GET' && req.url && req.url.startsWith('/vendor/')) {
+      handleVendorStatic(req, res);
     } else if (req.method === 'GET') {
       handleStatic(req, res);
     } else {

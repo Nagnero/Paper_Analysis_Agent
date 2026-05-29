@@ -1,6 +1,6 @@
 {
   "name": "paa",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "private": true,
   "description": "영어 논문 PDF를 멀티에이전트로 분석해 claim별 원문 근거가 매핑된 한국어 리포트를 생성하는 데스크탑 콘솔",
   "type": "module",
@@ -25,7 +25,8 @@
   "devDependencies": {
     "@electron/rebuild": "^4.0.4",
     "electron": "^37.10.3",
-    "electron-builder": "^26.8.1"
+    "electron-builder": "^26.8.1",
+    "pdfjs-dist": "4.10.38"
   },
   "author": "kjy56514415 <kjy56514415@gmail.com>",
   "license": "MIT",

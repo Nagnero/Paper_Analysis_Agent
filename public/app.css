@@ -59,6 +59,159 @@ html, body {
   position: relative;
 }
 
+/* 채팅(좌) / 논문 PDF(우) 분할 작업 영역 */
+#workspace {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+#chatPane {
+  flex: 1 1 0;
+  min-width: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.pane-resizer {
+  flex: 0 0 6px;
+  cursor: col-resize;
+  background: var(--border);
+  transition: background 0.15s;
+}
+.pane-resizer:hover,
+body.resizing .pane-resizer { background: var(--accent); }
+.pane-resizer[hidden] { display: none; }
+#pdfPane {
+  flex: 0 0 auto;
+  width: 46%;
+  min-width: 280px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #2b2b2e;
+}
+#pdfPane[hidden] { display: none; }
+.pdf-pane-head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #15171c;
+  border-bottom: 1px solid var(--border);
+}
+.pdf-pane-head .spacer { flex: 1; }
+.pdf-title {
+  font-size: 12.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.pdf-head-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1;
+  text-decoration: none;
+  cursor: pointer;
+}
+.pdf-head-btn:hover { background: var(--surface-2); }
+.pdf-pane-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: #525659;
+  padding: 8px 0;
+}
+/* PDF.js로 렌더된 페이지 */
+.pdf-page {
+  position: relative;
+  margin: 0 auto 10px;
+  background: #fff;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.4);
+}
+.pdf-page canvas { display: block; }
+/* 인용 하이라이트 (텍스트 레이어 span 위 반투명 박스) */
+.pdf-hl {
+  background: rgba(255, 213, 0, 0.45);
+  border-radius: 2px;
+  color: transparent;
+}
+.pdf-hl--flash { animation: pdfHlFlash 1.3s ease-out; }
+@keyframes pdfHlFlash {
+  0%, 30% { background: rgba(255, 145, 0, 0.85); box-shadow: 0 0 0 3px rgba(255, 145, 0, 0.55); }
+  100% { background: rgba(255, 213, 0, 0.45); box-shadow: 0 0 0 0 rgba(255, 145, 0, 0); }
+}
+.pdf-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 11px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.pdf-toggle:hover { background: var(--surface-2); }
+.pdf-toggle.active { border-color: var(--accent); color: var(--accent); }
+.pdf-toggle[hidden] { display: none; }
+body.resizing { cursor: col-resize; user-select: none; }
+body.resizing .pdf-pane-body { pointer-events: none; }
+
+/* 클릭형 근거 레퍼런스 (claims 표) */
+.evidence-ref {
+  display: inline;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.evidence-ref .ref-num {
+  color: var(--accent);
+  font-weight: 600;
+  margin-right: 3px;
+}
+.evidence-ref .ref-quote { border-bottom: 1px dotted var(--muted); }
+.evidence-ref:hover .ref-quote { border-bottom-color: var(--accent); color: var(--accent); }
+.evidence-ref .ref-loupe { font-size: 11px; opacity: 0.6; margin-left: 3px; }
+.evidence-ref:hover .ref-loupe { opacity: 1; }
+
+/* 토스트 */
+.toast {
+  position: fixed;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(20, 22, 28, 0.96);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-size: 13px;
+  z-index: 9999;
+  opacity: 0;
+  transition: opacity 0.2s;
+  pointer-events: none;
+}
+.toast.show { opacity: 1; }
+
 .sidebar-header {
   padding: 14px 14px 12px;
   border-bottom: 1px solid var(--border);
