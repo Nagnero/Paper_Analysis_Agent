@@ -207,26 +207,44 @@ const authBlockerCloseBtn = $('authBlockerCloseBtn');
 const authBlockerStatus = $('authBlockerStatus');
 
 const CLAUDE_MODELS = [
-  { value: 'claude-opus-4-7', label: 'Opus 4.7 (기본값, 최고 성능)' },
+  { value: 'claude-opus-4-8', label: 'Opus 4.8 (기본값, 최고 성능)' },
   { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6 (균형)' },
   { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5 (빠름/저렴)' },
 ];
 const CODEX_MODELS = [
-  { value: 'low', label: 'GPT-5.5 · low' },
-  { value: 'medium', label: 'GPT-5.5 · medium' },
-  { value: 'high', label: 'GPT-5.5 · high (기본값)' },
-  { value: 'xhigh', label: 'GPT-5.5 · xhigh' },
+  { value: 'gpt-5.5', label: 'GPT-5.5 (기본값)' },
+  { value: 'gpt-5.4', label: 'GPT-5.4' },
 ];
+// 추론 강도(reasoning effort).
+// Claude는 Claude Code `--effort`(모델별 지원 등급 다름), Codex는 model_reasoning_effort로 연동.
+const CLAUDE_EFFORTS_BY_MODEL = {
+  'claude-opus-4-8': ['low', 'medium', 'high', 'xhigh', 'max'],
+  'claude-sonnet-4-6': ['low', 'medium', 'high', 'max'],
+  'claude-haiku-4-5-20251001': [], // Haiku는 effort 미지원
+};
+const CODEX_EFFORTS = ['low', 'medium', 'high', 'xhigh'];
+const EFFORT_LABEL = { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' };
+const DEFAULT_CLAUDE_MODEL = 'claude-opus-4-8';
 const CODEX_MODEL = 'gpt-5.5';
+const DEFAULT_CLAUDE_REASONING_EFFORT = 'high';
 const DEFAULT_CODEX_REASONING_EFFORT = 'high';
 
-function getModelsFor(backend) {
-  const list = backend === 'codex' ? CODEX_MODELS : CLAUDE_MODELS;
-  return list;
+function modelsFor(backend) {
+  return backend === 'codex' ? CODEX_MODELS : CLAUDE_MODELS;
+}
+function defaultModelFor(backend) {
+  return backend === 'codex' ? CODEX_MODEL : DEFAULT_CLAUDE_MODEL;
+}
+function defaultEffortFor(backend) {
+  return backend === 'codex' ? DEFAULT_CODEX_REASONING_EFFORT : DEFAULT_CLAUDE_REASONING_EFFORT;
+}
+// (backend, model) → 지원 effort 값 배열.
+function effortValuesFor(backend, model) {
+  if (backend === 'codex') return CODEX_EFFORTS;
+  return CLAUDE_EFFORTS_BY_MODEL[model] || [];
 }
 
-function populateModelSelect(selectEl, backend, currentModel, currentReasoningEffort = '') {
-  const options = getModelsFor(backend);
+function fillSelect(selectEl, options, currentValue, fallback) {
   selectEl.innerHTML = '';
   for (const opt of options) {
     const el = document.createElement('option');
@@ -235,17 +253,28 @@ function populateModelSelect(selectEl, backend, currentModel, currentReasoningEf
     selectEl.appendChild(el);
   }
   const knownValues = options.map(o => o.value);
-  const currentValue = backend === 'codex'
-    ? (knownValues.includes(currentReasoningEffort) ? currentReasoningEffort : DEFAULT_CODEX_REASONING_EFFORT)
-    : currentModel;
-  if (knownValues.includes(currentValue)) {
-    selectEl.value = currentValue;
-  } else {
-    if (currentValue) {
-      console.warn(`모델 ${currentModel}이(가) 카탈로그에 없어 기본값으로 설정`);
-    }
-    selectEl.value = options[0].value;
+  selectEl.value = knownValues.includes(currentValue) ? currentValue : fallback;
+}
+
+function populateModelSelect(selectEl, backend, currentModel) {
+  fillSelect(selectEl, modelsFor(backend), currentModel, defaultModelFor(backend));
+}
+function populateReasoningSelect(selectEl, backend, model, currentEffort) {
+  const values = effortValuesFor(backend, model);
+  const def = defaultEffortFor(backend);
+  if (values.length === 0) {
+    // effort 미지원 모델(Haiku): 비활성 + 빈 값.
+    selectEl.innerHTML = '<option value="">강도 미지원</option>';
+    selectEl.value = '';
+    selectEl.disabled = true;
+    return;
   }
+  selectEl.disabled = false;
+  const options = values.map(v => ({
+    value: v,
+    label: `강도: ${EFFORT_LABEL[v]}${v === def ? ' (기본값)' : ''}`,
+  }));
+  fillSelect(selectEl, options, currentEffort, def);
 }
 
 // ---------------- 유틸 ----------------
@@ -922,19 +951,27 @@ function fillLlmRows(cfg) {
     if (!row) continue;
     const backendEl = row.querySelector('.llm-backend');
     const modelEl = row.querySelector('.llm-model');
+    const reasoningEl = row.querySelector('.llm-reasoning');
     const roleCfg = cfg[role] || { backend: 'claude', model: '', reasoningEffort: '' };
     backendEl.value = ['claude', 'codex'].includes(roleCfg.backend) ? roleCfg.backend : 'claude';
-    populateModelSelect(modelEl, backendEl.value, roleCfg.model || '', roleCfg.reasoningEffort || '');
+    populateModelSelect(modelEl, backendEl.value, roleCfg.model || '');
+    populateReasoningSelect(reasoningEl, backendEl.value, modelEl.value, roleCfg.reasoningEffort || '');
   }
 }
 function bindLlmRowEvents() {
   for (const row of settingsModal.querySelectorAll('.llm-row')) {
     const backendEl = row.querySelector('.llm-backend');
     const modelEl = row.querySelector('.llm-model');
+    const reasoningEl = row.querySelector('.llm-reasoning');
     if (backendEl.dataset.bound) continue;
     backendEl.dataset.bound = '1';
     backendEl.addEventListener('change', () => {
-      populateModelSelect(modelEl, backendEl.value, '', DEFAULT_CODEX_REASONING_EFFORT);
+      populateModelSelect(modelEl, backendEl.value, '');
+      populateReasoningSelect(reasoningEl, backendEl.value, modelEl.value, '');
+    });
+    // 모델이 바뀌면 지원 effort 등급도 달라지므로 강도 칸을 다시 채운다.
+    modelEl.addEventListener('change', () => {
+      populateReasoningSelect(reasoningEl, backendEl.value, modelEl.value, '');
     });
   }
 }
@@ -1015,10 +1052,12 @@ function applyAuthStatus() {
   for (const row of settingsModal.querySelectorAll('.llm-row')) {
     const backendEl = row.querySelector('.llm-backend');
     const modelEl = row.querySelector('.llm-model');
+    const reasoningEl = row.querySelector('.llm-reasoning');
     if (!backendEl) continue;
     if (!claudeOk && codexOk && backendEl.value === 'claude') {
       backendEl.value = 'codex';
-      if (modelEl) populateModelSelect(modelEl, 'codex', CODEX_MODEL, DEFAULT_CODEX_REASONING_EFFORT);
+      if (modelEl) populateModelSelect(modelEl, 'codex', CODEX_MODEL);
+      if (reasoningEl) populateReasoningSelect(reasoningEl, 'codex', CODEX_MODEL, DEFAULT_CODEX_REASONING_EFFORT);
     }
     for (const opt of backendEl.options) {
       const okMap = { claude: claudeOk, codex: codexOk };
@@ -1147,9 +1186,8 @@ async function saveLlmConfig() {
       if (!row) continue;
       const backend = row.querySelector('.llm-backend').value;
       const model = row.querySelector('.llm-model').value;
-      body[role] = backend === 'codex'
-        ? { backend, model: CODEX_MODEL, reasoningEffort: model || DEFAULT_CODEX_REASONING_EFFORT }
-        : { backend, model };
+      const reasoningEffort = row.querySelector('.llm-reasoning').value;
+      body[role] = { backend, model, reasoningEffort };
     }
     const res = await fetch('/api/llm-config', {
       method: 'PUT',

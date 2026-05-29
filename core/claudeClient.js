@@ -22,6 +22,11 @@ function safeModel(model) {
   return model;
 }
 
+// Claude Code CLI의 추론 강도는 `--effort` 플래그로 제어한다(low/medium/high/xhigh/max).
+// Opus 4.8/4.7은 adaptive 전용이라 MAX_THINKING_TOKENS는 무시되므로 effort만 사용.
+// Haiku 등 미지원 모델은 빈 effort가 들어오므로 플래그를 붙이지 않는다.
+const CLAUDE_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
+
 /**
  * Claude CLI 호출. JSON 응답에서 result 필드의 텍스트를 반환.
  * @param {string} prompt
@@ -46,6 +51,9 @@ export async function callClaude(prompt, opts = {}) {
     if (opts.model) {
       const m = safeModel(opts.model);
       if (m) cmdParts.push('--model', m);
+    }
+    if (CLAUDE_EFFORTS.has(opts.reasoningEffort)) {
+      cmdParts.push('--effort', opts.reasoningEffort);
     }
     const command = `${cmdParts.join(' ')} < "${promptFile}"`;
 
@@ -87,6 +95,7 @@ export async function callClaude(prompt, opts = {}) {
             opts.onMeta({
               backend: 'claude',
               model: opts.model || '',
+              reasoningEffort: opts.reasoningEffort || '',
               usage: json.usage,
               durationMs: Date.now() - startedAt,
               sessionIdFromResponse: json.session_id,

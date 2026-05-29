@@ -623,9 +623,9 @@ async function handleLlmConfigPut(req, res) {
         res.end(JSON.stringify({ error: `${role}.reasoningEffort must be string` }));
         return;
       }
-      if (entry.reasoningEffort !== undefined && entry.reasoningEffort !== '' && !llmConfig.isCodexReasoningEffort(entry.reasoningEffort)) {
+      if (entry.reasoningEffort !== undefined && entry.reasoningEffort !== '' && !llmConfig.isReasoningEffort(entry.reasoningEffort)) {
         res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ error: `${role}.reasoningEffort must be one of ${llmConfig.CODEX_REASONING_EFFORTS.join(', ')}` }));
+        res.end(JSON.stringify({ error: `${role}.reasoningEffort must be one of ${llmConfig.REASONING_EFFORTS.join(', ')}` }));
         return;
       }
     }

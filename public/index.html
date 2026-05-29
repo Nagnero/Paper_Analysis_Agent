@@ -140,31 +140,36 @@
           </details>
         </div>
         <div class="tab-pane" data-pane="llm">
-          <p class="llm-hint">각 에이전트별로 백엔드(Claude / Codex)를 지정합니다. Claude는 모델을 고르고, Codex는 GPT-5.5 고정 상태에서 추론 강도만 고릅니다.<br>채팅: 분석 후 사용자가 같은 논문에 대해 질문할 때 사용.</p>
+          <p class="llm-hint">각 에이전트별로 백엔드(Claude / Codex)·모델·추론 강도를 지정합니다. 모델은 가운데, 추론 강도는 오른쪽 드롭다운에서 고릅니다. 지원 강도는 모델마다 다릅니다(Opus 4.8: low~max, Sonnet 4.6: max까지·xhigh 없음, Haiku: 강도 미지원, Codex: low~xhigh).<br>채팅: 분석 후 사용자가 같은 논문에 대해 질문할 때 사용.</p>
           <div class="llm-row" data-role="orchestrator">
             <label>오케스트레이터</label>
             <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
             <select class="llm-model"></select>
+            <select class="llm-reasoning"></select>
           </div>
           <div class="llm-row" data-role="analyst">
             <label>분석가</label>
             <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
             <select class="llm-model"></select>
+            <select class="llm-reasoning"></select>
           </div>
           <div class="llm-row" data-role="verifier">
             <label>검증가</label>
             <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
             <select class="llm-model"></select>
+            <select class="llm-reasoning"></select>
           </div>
           <div class="llm-row" data-role="writer">
             <label>작가</label>
             <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
             <select class="llm-model"></select>
+            <select class="llm-reasoning"></select>
           </div>
           <div class="llm-row" data-role="chat">
             <label>채팅</label>
             <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
             <select class="llm-model"></select>
+            <select class="llm-reasoning"></select>
           </div>
           <div class="llm-foot">
             <button type="button" id="resetLlmBtn" class="btn-ghost small">모든 값을 기본값으로</button>

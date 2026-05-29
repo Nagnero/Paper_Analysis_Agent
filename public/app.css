@@ -934,8 +934,9 @@ button { font-family: inherit; }
   font-size: 12.5px;
   outline: none;
 }
-.llm-row select.llm-backend { flex: 0 0 110px; }
-.llm-row select.llm-model { flex: 1; min-width: 0; }
+.llm-row select.llm-backend { flex: 0 0 100px; }
+.llm-row select.llm-model { flex: 1 1 0; min-width: 0; }
+.llm-row select.llm-reasoning { flex: 0 0 160px; min-width: 0; }
 .llm-row select:focus { border-color: var(--accent); }
 .llm-row.has-conflict select.llm-backend { border-color: var(--error); background: rgba(255, 80, 80, 0.08); }
 
