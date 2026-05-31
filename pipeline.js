@@ -10,6 +10,7 @@ import { run as runOrchestrator, EMPTY_DIRECTIVE } from './agents/orchestrator.j
 import { run as runFocusedAudit } from './agents/focusedAudit.js';
 import { getCurrent as getPrompts } from './core/promptStore.js';
 import { getConfig as getLlmConfig } from './core/llmConfig.js';
+import { stripInvalidCitationMarkers } from './public/citationContract.js';
 import * as library from './core/library.js';
 import * as fileManager from './core/fileManager.js';
 import { writeFile } from 'node:fs/promises';
@@ -144,7 +145,7 @@ export async function runPipeline(pdfPath, onProgress = () => {}, options = {}) 
 
   onProgress({ stage: 'writer', message: `${stageLabel('writer')} 작가: 한국어 리포트 작성 중...` });
   const tW = Date.now();
-  const report = await runWriter({
+  const rawReport = await runWriter({
     title: analystOut.title || parsed.title,
     verifiedClaims,
     reproducibility: analystOut.reproducibility,
@@ -156,6 +157,7 @@ export async function runPipeline(pdfPath, onProgress = () => {}, options = {}) 
     llm: llmConfig.writer,
     onMeta: m => { metrics.writer = { ...m }; },
   });
+  const report = stripInvalidCitationMarkers(rawReport, verifiedClaims);
   metrics.writer.durationMs = Date.now() - tW;
   onProgress({
     stage: 'writer',

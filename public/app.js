@@ -2,6 +2,7 @@
 // markdown 렌더러는 백엔드 정적 라우트 화이트리스트가 /markdown.js를 포함하지 않아
 // 별도 파일로 import할 수 없어 이 파일에 inline으로 포함.
 import { createPdfViewer } from '/pdfViewer.js';
+import { buildCitationRefMap, createCitationMarkerRegex } from '/citationContract.js';
 
 // ---------------- Markdown 렌더러 ----------------
 
@@ -138,6 +139,80 @@ export function renderMarkdown(src) {
   return out.join('\n');
 }
 
+// ---------------- 인라인 근거 링크 렌더링 ----------------
+
+function shouldSkipCitationEnhance(node) {
+  const tag = node?.parentElement?.tagName;
+  return ['CODE', 'PRE', 'SCRIPT', 'STYLE', 'A', 'BUTTON'].includes(tag);
+}
+
+function createInlineEvidenceButton(ref, number) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'evidence-ref-inline';
+  btn.textContent = `[${number}]`;
+  btn.title = '논문에서 이 근거 위치로 이동';
+  btn.setAttribute('aria-label', `논문 근거 ${number}번으로 이동`);
+  btn.addEventListener('click', () => onEvidenceClick(ref.quote, ref));
+  return btn;
+}
+
+function evidenceLookupOpts(ref) {
+  return {
+    sourcePage: ref?.sourcePage ?? ref?.claim?.sourcePage,
+    sourceSection: ref?.sourceSection ?? ref?.evidenceSection ?? ref?.claim?.sourceSection,
+  };
+}
+
+function isEvidenceHighlightable(ref) {
+  // PDF가 아직 로드 중이면 판단을 보류하고, 로드 완료 후 메시지를 다시 렌더링한다.
+  if (!pdfViewer || !pdfState.available || !pdfViewer.isLoaded()) return true;
+  return pdfViewer.canHighlightQuote(ref?.quote ?? ref?.evidenceQuote ?? '', evidenceLookupOpts(ref));
+}
+
+function enhanceEvidenceRefs(root, verifiedClaims) {
+  const refs = buildCitationRefMap(verifiedClaims);
+  if (!refs.size || !root.textContent.includes('[[cite:')) return;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const textNodes = [];
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    const markerRe = createCitationMarkerRegex();
+    if (!shouldSkipCitationEnhance(node) && markerRe.test(node.nodeValue || '')) {
+      textNodes.push(node);
+    }
+  }
+
+  const refNumbers = new Map();
+  let nextNumber = 1;
+  for (const node of textNodes) {
+    const text = node.nodeValue || '';
+    const frag = document.createDocumentFragment();
+    let lastIndex = 0;
+    const markerRe = createCitationMarkerRegex();
+    let match;
+    while ((match = markerRe.exec(text)) !== null) {
+      const [marker, id] = match;
+      if (match.index > lastIndex) frag.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+      const ref = refs.get(id);
+      if (ref && isEvidenceHighlightable(ref)) {
+        if (!refNumbers.has(id)) refNumbers.set(id, nextNumber++);
+        frag.appendChild(createInlineEvidenceButton(ref, refNumbers.get(id)));
+      }
+      lastIndex = match.index + marker.length;
+    }
+    if (lastIndex < text.length) frag.appendChild(document.createTextNode(text.slice(lastIndex)));
+    node.parentNode.replaceChild(frag, node);
+  }
+}
+
+function renderMarkdownWithEvidence(src, verifiedClaims) {
+  const root = document.createElement('div');
+  root.innerHTML = renderMarkdown(src);
+  enhanceEvidenceRefs(root, verifiedClaims);
+  return root;
+}
+
 // ---------------- State ----------------
 
 const state = {
@@ -148,6 +223,7 @@ const state = {
   libraryTree: { folders: [], unfoldered: [] },
   currentPaperId: null,
   currentAnalysisId: null,
+  currentVerifiedClaims: [],
   mode: 'new',
 };
 
@@ -276,7 +352,11 @@ function showPaperPdf(paperId, title) {
   // 같은 논문을 다시 열면 재로드 생략(깜빡임 방지)
   if (pdfViewer.currentPaperId !== paperId) {
     pdfViewer.currentPaperId = paperId;
-    pdfViewer.load(url).catch(err => console.warn('PDF 로드 실패', err));
+    pdfViewer.load(url)
+      .then(() => rerenderEvidenceMessages())
+      .catch(err => console.warn('PDF 로드 실패', err));
+  } else if (pdfViewer.isLoaded()) {
+    rerenderEvidenceMessages();
   }
 }
 
@@ -294,6 +374,7 @@ function showLocalPdf(file) {
   applyPdfLayout();
   file.arrayBuffer()
     .then(buf => pdfViewer.load({ data: buf }))
+    .then(() => rerenderEvidenceMessages())
     .catch(err => console.warn('로컬 PDF 미리보기 실패', err));
 }
 
@@ -323,11 +404,9 @@ function onEvidenceClick(quote, v) {
   }
   pdfState.open = true;
   applyPdfLayout();
-  const r = pdfViewer.highlightQuote(quote, {
-    sourcePage: v?.claim?.sourcePage,
-    sourceSection: v?.evidenceSection ?? v?.claim?.sourceSection,
-  });
-  if (!r.found) showToast('논문에서 해당 근거 위치를 찾지 못했습니다');
+  const evidenceQuote = quote ?? v?.quote ?? v?.evidenceQuote ?? '';
+  const r = pdfViewer.highlightQuote(evidenceQuote, evidenceLookupOpts(v));
+  if (!r.found && !r.navigated) showToast('논문에서 해당 근거 위치를 찾지 못했습니다');
 }
 
 let toastTimer = 0;
@@ -594,7 +673,8 @@ function renderAnalysisBubble(bubble, msg) {
   if (msg.report) {
     const report = document.createElement('div');
     report.className = 'report-body';
-    report.innerHTML = renderMarkdown(msg.report);
+    const rendered = renderMarkdownWithEvidence(msg.report, msg.verifiedClaims || state.currentVerifiedClaims);
+    while (rendered.firstChild) report.appendChild(rendered.firstChild);
     bubble.appendChild(report);
   }
 
@@ -767,7 +847,8 @@ function renderAssistantChatBubble(bubble, msg) {
   }
   const body = document.createElement('div');
   body.className = 'report-body chat-body';
-  body.innerHTML = renderMarkdown(msg.text || '');
+  const rendered = renderMarkdownWithEvidence(msg.text || '', msg.citations || state.currentVerifiedClaims);
+  while (rendered.firstChild) body.appendChild(rendered.firstChild);
   bubble.appendChild(body);
 }
 
@@ -807,6 +888,14 @@ function updateMessage(id, patch) {
 function scrollToBottom() {
   // 부드럽지 않게 즉시 — 분석 중 빈번한 업데이트 때문에
   if (chatMainEl) chatMainEl.scrollTop = chatMainEl.scrollHeight;
+}
+
+function rerenderEvidenceMessages() {
+  for (const msg of state.messages) {
+    if (msg.role === 'assistant' && (msg.kind === 'analysis' || msg.kind === 'chat')) {
+      renderMsg(msg);
+    }
+  }
 }
 
 // ---------------- 입력 / 첨부 ----------------
@@ -945,7 +1034,8 @@ function handleSseEvent(payload, msgId) {
     msg.status = 'done';
     msg.report = payload.report || '';
     msg.metrics = payload.metrics;
-    msg.verifiedClaims = payload.verifiedClaims;
+    msg.verifiedClaims = payload.verifiedClaims || [];
+    state.currentVerifiedClaims = msg.verifiedClaims;
     msg.analyst = payload.analyst;
     msg.directive = payload.directive;
     msg.auditResults = payload.auditResults;
@@ -995,7 +1085,7 @@ async function sendChat(question) {
     let json = null;
     try { json = await res.json(); } catch { /* ignore */ }
     if (res.ok && json && typeof json.answer === 'string') {
-      updateMessage(assistantMsg.id, { status: 'done', text: json.answer });
+      updateMessage(assistantMsg.id, { status: 'done', text: json.answer, citations: json.citations || [] });
     } else if (res.status === 410) {
       state.sessionId = null;
       updateComposerMode();
@@ -1083,6 +1173,7 @@ function clearConversation() {
   state.pendingPdf = null;
   state.currentPaperId = null;
   state.currentAnalysisId = null;
+  state.currentVerifiedClaims = [];
   state.mode = 'new';
   messagesEl.innerHTML = '';
   clearAttachment();
@@ -1608,6 +1699,7 @@ async function openPaper(paperId) {
     state.mode = 'paper';
     state.currentPaperId = paper.id;
     state.currentAnalysisId = analysis ? analysis.id : null;
+    state.currentVerifiedClaims = analysis?.claims || [];
     state.sessionId = null;
     state.messages = [];
     messagesEl.innerHTML = '';
@@ -1629,7 +1721,7 @@ async function openPaper(paperId) {
         status: 'done',
         progress: [{ stage: 'done', message: '저장된 분석' }],
         report: analysis.report || '',
-        verifiedClaims: analysis.claims,
+        verifiedClaims: state.currentVerifiedClaims,
         metrics: analysis.metrics,
         directive: analysis.directive ?? null,
         auditResults: analysis.auditResults ?? null,
@@ -1887,6 +1979,7 @@ if (libraryResetBtn) {
       state.pendingPdf = null;
       state.currentPaperId = null;
       state.currentAnalysisId = null;
+      state.currentVerifiedClaims = [];
       state.mode = 'new';
       messagesEl.innerHTML = '';
       clearAttachment();
