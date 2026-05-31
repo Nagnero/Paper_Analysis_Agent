@@ -4,7 +4,7 @@
 // Electron 에서는 startServer({ port: 0 }) 호출로 임의 포트에 부트.
 import http from 'node:http';
 import fs from 'node:fs';
-import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import { readFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +21,10 @@ import { parsePdf } from './utils/parsePdf.js';
 import { buildCitationRefMap, citationRefsForText, stripInvalidCitationMarkers } from './public/citationContract.js';
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+const MAX_JSON_BODY_BYTES = 1 * 1024 * 1024;
+const MAX_CHAT_JSON_BODY_BYTES = 6 * 1024 * 1024;
+const MAX_SELECTION_IMAGE_BYTES = 3 * 1024 * 1024;
+const MAX_SELECTION_TEXT_CHARS = 4000;
 const SESSION_TTL_MS = 60 * 60 * 1000;
 const sessions = new Map();
 
@@ -149,12 +153,146 @@ function buildGroundedChatInstructions(verifiedClaims) {
 ${evidenceList}`;
 }
 
-async function readJsonBody(req) {
+function requestError(status, message) {
+  const err = new Error(message);
+  err.status = status;
+  return err;
+}
+
+async function readJsonBody(req, { maxBytes = MAX_JSON_BODY_BYTES } = {}) {
   let body = '';
+  let bytes = 0;
   req.setEncoding('utf8');
-  for await (const chunk of req) body += chunk;
+  for await (const chunk of req) {
+    bytes += Buffer.byteLength(chunk, 'utf8');
+    if (bytes > maxBytes) throw requestError(413, '요청 본문이 너무 큽니다.');
+    body += chunk;
+  }
   if (!body) return {};
-  return JSON.parse(body);
+  try {
+    return JSON.parse(body);
+  } catch {
+    throw requestError(400, 'invalid JSON');
+  }
+}
+
+function handleJsonError(res, err) {
+  if (err?.status) return jsonResponse(res, err.status, { error: err.message });
+  return jsonResponse(res, 500, { error: err.message });
+}
+
+function clampText(value, maxChars = MAX_SELECTION_TEXT_CHARS) {
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, maxChars);
+}
+
+function finiteNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isPng(bytes) {
+  return bytes.length >= 8
+    && bytes[0] === 0x89
+    && bytes[1] === 0x50
+    && bytes[2] === 0x4E
+    && bytes[3] === 0x47
+    && bytes[4] === 0x0D
+    && bytes[5] === 0x0A
+    && bytes[6] === 0x1A
+    && bytes[7] === 0x0A;
+}
+
+function selectionLabel(selection) {
+  if (!selection) return '';
+  const rect = selection.rect || {};
+  const size = finiteNumber(rect.width) && finiteNumber(rect.height)
+    ? ` · ${Math.round(rect.width)}×${Math.round(rect.height)}`
+    : '';
+  return `p.${selection.page} · 선택 영역${size}`;
+}
+
+async function preparePdfSelection(rawSelection) {
+  if (rawSelection == null) return null;
+  if (typeof rawSelection !== 'object' || rawSelection.type !== 'pdf-region') {
+    throw requestError(400, 'selection.type must be pdf-region');
+  }
+  const page = Number(rawSelection.page);
+  const rect = rawSelection.rect || {};
+  if (!Number.isInteger(page) || page < 1) throw requestError(400, 'selection.page invalid');
+  for (const key of ['x', 'y', 'width', 'height']) {
+    if (!finiteNumber(rect[key]) || rect[key] < 0) throw requestError(400, `selection.rect.${key} invalid`);
+  }
+  if (rect.width <= 0 || rect.height <= 0) throw requestError(400, 'selection.rect size invalid');
+
+  const normalized = {
+    page,
+    rect: {
+      x: rect.x,
+      y: rect.y,
+      width: rect.width,
+      height: rect.height,
+      units: 'css-px',
+    },
+    text: clampText(rawSelection.text),
+    imageMeta: null,
+    imagePath: '',
+    tempDir: '',
+  };
+
+  const image = rawSelection.image;
+  if (image != null) {
+    if (typeof image !== 'object' || image.mime !== 'image/png' || typeof image.dataUrl !== 'string') {
+      throw requestError(400, 'selection.image must be a PNG data URL');
+    }
+    const prefix = 'data:image/png;base64,';
+    if (!image.dataUrl.startsWith(prefix)) throw requestError(400, 'selection.image dataUrl invalid');
+    const base64 = image.dataUrl.slice(prefix.length);
+    if (!/^[A-Za-z0-9+/=\s]+$/.test(base64)) throw requestError(400, 'selection.image base64 invalid');
+    const bytes = Buffer.from(base64, 'base64');
+    if (bytes.length <= 0) throw requestError(400, 'selection.image empty');
+    if (bytes.length > MAX_SELECTION_IMAGE_BYTES) throw requestError(413, '선택 영역 이미지가 너무 큽니다.');
+    if (!isPng(bytes)) throw requestError(400, 'selection.image is not a PNG file');
+    const width = Number(image.width);
+    const height = Number(image.height);
+    if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) {
+      throw requestError(400, 'selection.image dimensions invalid');
+    }
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), 'paa-selection-'));
+    const imagePath = path.join(tempDir, `selection-p${page}.png`);
+    await writeFile(imagePath, bytes);
+    normalized.tempDir = tempDir;
+    normalized.imagePath = imagePath;
+    normalized.imageMeta = { mime: 'image/png', width, height, bytes: bytes.length };
+  }
+  return normalized;
+}
+
+async function cleanupPdfSelection(selection) {
+  if (selection?.tempDir) await rm(selection.tempDir, { recursive: true, force: true }).catch(() => {});
+}
+
+function selectedRegionContext(selection) {
+  if (!selection) return '';
+  const rect = selection.rect;
+  const lines = [
+    '## 사용자가 PDF에서 선택한 영역',
+    `- page: p.${selection.page}`,
+    `- rectangle: x=${Math.round(rect.x)}, y=${Math.round(rect.y)}, width=${Math.round(rect.width)}, height=${Math.round(rect.height)} (${rect.units})`,
+  ];
+  if (selection.text) lines.push(`- selected text: ${selection.text}`);
+  if (selection.imagePath) {
+    lines.push(`- selected image file: ${selection.imagePath}`);
+    lines.push('- selected image instruction: 첨부/파일 이미지가 figure·시각 자료 질문의 1차 근거입니다.');
+  } else {
+    lines.push('- selected image: 없음');
+  }
+  lines.push('');
+  lines.push('응답 지침: 선택 영역을 우선 근거로 답하세요. 이미지 파일이 전달되지 않았거나 읽을 수 없다면 이미지 내용을 보았다고 말하지 말고 가능한 범위와 실패 이유를 설명하세요.');
+  return lines.join('\n');
+}
+
+function questionWithSelectionMetadata(question, selection) {
+  if (!selection) return question;
+  return `${question}\n\n[선택 영역: ${selectionLabel(selection)}]`;
 }
 
 async function handleLibraryTree(req, res) {
@@ -298,12 +436,12 @@ async function handleLibraryDeletePaper(req, res, id) {
 }
 
 async function handleLibraryPaperChat(req, res, paperId) {
+  let preparedSelection = null;
   try {
-    const body = await readJsonBody(req);
+    const body = await readJsonBody(req, { maxBytes: MAX_CHAT_JSON_BODY_BYTES });
     const question = typeof body.question === 'string' ? body.question : '';
     if (!question.trim()) return jsonResponse(res, 400, { error: 'question required' });
     if (question.length > 8000) return jsonResponse(res, 413, { error: '질문이 너무 깁니다 (최대 8000자).' });
-
     const paper = await library.getPaper(paperId);
     if (!paper) return jsonResponse(res, 404, { error: 'paper not found' });
     const latest = await library.getLatestAnalysis(paper.id);
@@ -317,6 +455,7 @@ async function handleLibraryPaperChat(req, res, paperId) {
     if (!chatEntry || !chatEntry.loggedIn) {
       return jsonResponse(res, 401, { error: `${chatCfg.backend}에 로그인이 필요합니다. 설정에서 다른 백엔드로 바꾸거나 로그인하세요.` });
     }
+    preparedSelection = await preparePdfSelection(body.selection);
 
     // paperText 캐시 우선, 없으면 PDF 재파싱 fallback
     let paperText = await fileManager.readPaperText(paper.id);
@@ -328,6 +467,7 @@ async function handleLibraryPaperChat(req, res, paperId) {
     }
     const files = await fileManager.readAnalysisFiles(paper.id, latest.id);
 
+    const selectionContext = selectedRegionContext(preparedSelection);
     const promptText = `다음 영어 논문과 한국어 분석 리포트를 참고해 사용자 질문에 답하세요.
 
 ## 논문 원문 (요약본)
@@ -339,6 +479,7 @@ ${files.report ?? ''}
 ${buildGroundedChatInstructions(files.claims)}
 
 --- 위는 컨텍스트 ---
+${selectionContext ? `\n${selectionContext}\n` : ''}
 
 사용자 질문: ${question}`;
 
@@ -348,30 +489,31 @@ ${buildGroundedChatInstructions(files.claims)}
       reasoningEffort: chatCfg.reasoningEffort,
       timeoutMs: 600_000,
     };
+    if (preparedSelection?.imagePath) callOpts.imagePaths = [preparedSelection.imagePath];
     const rawAnswer = await callLLM(promptText, callOpts);
     const answer = stripInvalidCitationMarkers(rawAnswer, files.claims);
     const citations = citationRefsForText(files.claims, answer);
 
     const modelTag = `${chatCfg.backend}${chatCfg.model ? '/' + chatCfg.model : ''}`;
-    const { user: userRow, assistant: assistantRow } = await library.appendChatTurn(latest.id, question, answer, modelTag);
+    const storedQuestion = questionWithSelectionMetadata(question, preparedSelection);
+    const { user: userRow, assistant: assistantRow } = await library.appendChatTurn(latest.id, storedQuestion, answer, modelTag);
     jsonResponse(res, 200, { answer, citations, chats: [userRow, assistantRow] });
   } catch (err) {
-    jsonResponse(res, 500, { error: err.message });
+    handleJsonError(res, err);
+  } finally {
+    await cleanupPdfSelection(preparedSelection);
   }
 }
 
 // === /chat (deprecated v0.3 — 사이드바 UI로 이전 후 제거 예정) ===
 async function handleChat(req, res) {
-  let body = '';
-  req.setEncoding('utf8');
-  for await (const chunk of req) body += chunk;
+  let preparedSelection = null;
 
   let payload;
   try {
-    payload = JSON.parse(body);
-  } catch {
-    res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ error: 'invalid JSON' }));
+    payload = await readJsonBody(req, { maxBytes: MAX_CHAT_JSON_BODY_BYTES });
+  } catch (err) {
+    jsonResponse(res, err.status || 400, { error: err.message || 'invalid JSON' });
     return;
   }
 
@@ -391,7 +533,6 @@ async function handleChat(req, res) {
     res.end(JSON.stringify({ error: '질문이 너무 깁니다 (최대 8000자).' }));
     return;
   }
-
   gcSessions();
   const sess = sessions.get(sessionId);
   if (!sess) {
@@ -409,13 +550,16 @@ async function handleChat(req, res) {
     res.end(JSON.stringify({ error: `${chatCfg.backend}에 로그인이 필요합니다. 설정에서 다른 백엔드로 바꾸거나 로그인하세요.` }));
     return;
   }
-  // codex 백엔드는 세션 미지원 → 매번 paperText+report 포함한 fresh 프롬프트 사용
-  const useFreshPrompt = chatCfg.backend === 'codex' || !sess.chatStartedByBackend[chatCfg.backend];
+  try {
+    preparedSelection = await preparePdfSelection(payload.selection);
+    // codex 백엔드는 세션 미지원 → 매번 paperText+report 포함한 fresh 프롬프트 사용
+    const useFreshPrompt = chatCfg.backend === 'codex' || !sess.chatStartedByBackend[chatCfg.backend];
 
-  let promptText;
-  let callOpts;
-  if (useFreshPrompt) {
-    promptText = `다음 영어 논문과 한국어 분석 리포트를 참고해 사용자 질문에 답하세요.
+    let promptText;
+    let callOpts;
+    const selectionContext = selectedRegionContext(preparedSelection);
+    if (useFreshPrompt) {
+      promptText = `다음 영어 논문과 한국어 분석 리포트를 참고해 사용자 질문에 답하세요.
 
 ## 논문 원문 (요약본)
 ${sess.paperText ?? ''}
@@ -426,27 +570,30 @@ ${sess.report ?? ''}
 ${buildGroundedChatInstructions(sess.verifiedClaims)}
 
 --- 위는 컨텍스트 ---
+${selectionContext ? `\n${selectionContext}\n` : ''}
 
 사용자 질문: ${question}`;
-    callOpts = {
-      backend: chatCfg.backend,
-      model: chatCfg.model,
-      reasoningEffort: chatCfg.reasoningEffort,
-      timeoutMs: 600_000,
-    };
-    if (chatCfg.backend !== 'codex') callOpts.sessionId = sessionId;
-  } else {
-    promptText = question;
-    callOpts = {
-      backend: chatCfg.backend,
-      model: chatCfg.model,
-      reasoningEffort: chatCfg.reasoningEffort,
-      resume: sessionId,
-      timeoutMs: 600_000,
-    };
-  }
+      callOpts = {
+        backend: chatCfg.backend,
+        model: chatCfg.model,
+        reasoningEffort: chatCfg.reasoningEffort,
+        timeoutMs: 600_000,
+      };
+      if (chatCfg.backend !== 'codex') callOpts.sessionId = sessionId;
+    } else {
+      promptText = selectionContext ? `${selectionContext}
 
-  try {
+사용자 질문: ${question}` : question;
+      callOpts = {
+        backend: chatCfg.backend,
+        model: chatCfg.model,
+        reasoningEffort: chatCfg.reasoningEffort,
+        resume: sessionId,
+        timeoutMs: 600_000,
+      };
+    }
+    if (preparedSelection?.imagePath) callOpts.imagePaths = [preparedSelection.imagePath];
+
     const rawAnswer = await callLLM(promptText, callOpts);
     const answer = stripInvalidCitationMarkers(rawAnswer, sess.verifiedClaims);
     if (chatCfg.backend !== 'codex') sess.chatStartedByBackend[chatCfg.backend] = true;
@@ -454,9 +601,12 @@ ${buildGroundedChatInstructions(sess.verifiedClaims)}
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ answer, citations }));
   } catch (err) {
-    res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.writeHead(err.status || 500, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ error: err.message }));
+  } finally {
+    await cleanupPdfSelection(preparedSelection);
   }
+
 }
 
 async function handleJsonAnalyze(req, res) {

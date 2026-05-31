@@ -224,6 +224,7 @@ const state = {
   currentPaperId: null,
   currentAnalysisId: null,
   currentVerifiedClaims: [],
+  pendingPdfSelection: null,
   mode: 'new',
 };
 
@@ -289,12 +290,17 @@ const pdfPane = $('pdfPane');
 const pdfBody = $('pdfBody');
 const pdfToggleBtn = $('pdfToggleBtn');
 const pdfCloseBtn = $('pdfCloseBtn');
+const pdfSelectBtn = $('pdfSelectBtn');
 const paneResizer = $('paneResizer');
 const pdfTitleEl = $('pdfTitle');
 const pdfOpenExternal = $('pdfOpenExternal');
 const PDF_WIDTH_KEY = 'paa.pdfPaneWidth';
 
 const pdfViewer = pdfBody ? createPdfViewer(pdfBody) : null;
+const selectionChip = $('selectionChip');
+const selectionName = $('selectionName');
+const selectionMeta = $('selectionMeta');
+const selectionClear = $('selectionClear');
 
 const pdfState = {
   blobUrl: '',      // 외부 링크용 blob URL (해제 대상)
@@ -321,10 +327,78 @@ function applyPdfLayout() {
   const show = pdfState.available && pdfState.open;
   if (pdfPane) pdfPane.hidden = !show;
   if (paneResizer) paneResizer.hidden = !show;
+  if (pdfSelectBtn) {
+    pdfSelectBtn.hidden = !pdfState.available;
+    pdfSelectBtn.classList.toggle('active', !!pdfViewer?.isSelectionMode?.());
+  }
   if (pdfToggleBtn) {
     pdfToggleBtn.hidden = !pdfState.available;
     pdfToggleBtn.classList.toggle('active', show);
   }
+}
+
+function selectionSummary(selection) {
+  if (!selection) return { name: '', meta: '' };
+  const page = Number(selection.page) || '?';
+  const text = (selection.text || '').replace(/\s+/g, ' ').trim();
+  const name = text ? text.slice(0, 80) : `p.${page} 선택 영역`;
+  const size = selection.image ? `${selection.image.width}×${selection.image.height}` : '';
+  return {
+    name,
+    meta: text ? `p.${page} · 텍스트+이미지` : `p.${page} · 이미지 ${size}`.trim(),
+  };
+}
+
+function selectionRequestPayload(selection) {
+  if (!selection) return null;
+  return {
+    type: 'pdf-region',
+    page: selection.page,
+    rect: selection.rect,
+    text: selection.text || '',
+    image: selection.image || null,
+  };
+}
+
+function setPdfSelection(selection) {
+  state.pendingPdfSelection = selection || null;
+  if (!selectionChip || !selectionName || !selectionMeta) return;
+  if (!selection) {
+    selectionChip.hidden = true;
+    selectionName.textContent = '';
+    selectionMeta.textContent = '';
+    return;
+  }
+  const summary = selectionSummary(selection);
+  selectionName.textContent = summary.name;
+  selectionName.title = summary.name;
+  selectionMeta.textContent = summary.meta;
+  selectionChip.hidden = false;
+  setComposerHint('선택 영역이 다음 질문에 함께 전달됩니다.');
+}
+
+function clearPdfSelection({ clearViewer = true } = {}) {
+  state.pendingPdfSelection = null;
+  if (selectionChip) selectionChip.hidden = true;
+  if (selectionName) selectionName.textContent = '';
+  if (selectionMeta) selectionMeta.textContent = '';
+  if (clearViewer) pdfViewer?.clearSelection?.();
+}
+
+function setPdfSelectionMode(enabled) {
+  if (!enabled) {
+    pdfViewer?.setSelectionMode?.(false);
+    if (pdfSelectBtn) pdfSelectBtn.classList.remove('active');
+    setComposerHint('');
+    return;
+  }
+  if (!pdfViewer || !pdfState.available || !pdfViewer.isLoaded()) {
+    showToast('논문 PDF를 먼저 열어주세요');
+    return;
+  }
+  const active = pdfViewer.setSelectionMode(true);
+  if (pdfSelectBtn) pdfSelectBtn.classList.toggle('active', active);
+  setComposerHint(active ? 'PDF에서 질문할 영역을 드래그하세요.' : '');
 }
 
 function clampPdfWidth(px) {
@@ -341,6 +415,7 @@ function setPdfWidth(px) {
 // 저장된 논문 PDF를 서버에서 로드. title 생략 시 기존 제목 유지.
 function showPaperPdf(paperId, title) {
   if (!pdfViewer) return;
+  clearPdfSelection();
   revokePdfBlob();
   setPdfTitle(title);
   const url = `/api/library/papers/${paperId}/pdf`;
@@ -363,6 +438,7 @@ function showPaperPdf(paperId, title) {
 // 업로드 중인 로컬 파일 즉시 미리보기.
 function showLocalPdf(file) {
   if (!pdfViewer) return;
+  clearPdfSelection();
   revokePdfBlob();
   setPdfTitle(file.name || '논문');
   pdfState.blobUrl = URL.createObjectURL(file);
@@ -381,6 +457,7 @@ function showLocalPdf(file) {
 // 표시할 PDF 없음 (새 분석 초기 상태 등).
 function clearPdf() {
   if (!pdfViewer) return;
+  clearPdfSelection();
   revokePdfBlob();
   pdfViewer.currentPaperId = null;
   pdfViewer.destroy();
@@ -396,12 +473,21 @@ function togglePdfPane() {
   applyPdfLayout();
 }
 
+if (pdfViewer) {
+  pdfViewer.onRegionSelected((selection) => {
+    setPdfSelectionMode(false);
+    setPdfSelection(selection);
+    composerInput?.focus();
+  });
+}
+
 // claim 근거 클릭 → PDF에서 해당 인용문으로 점프 + 하이라이트
 function onEvidenceClick(quote, v) {
   if (!pdfViewer || !pdfState.available) {
     showToast('논문 PDF를 먼저 열어주세요');
     return;
   }
+  setPdfSelectionMode(false);
   pdfState.open = true;
   applyPdfLayout();
   const evidenceQuote = quote ?? v?.quote ?? v?.evidenceQuote ?? '';
@@ -426,6 +512,9 @@ function showToast(text) {
 
 if (pdfToggleBtn) pdfToggleBtn.addEventListener('click', togglePdfPane);
 if (pdfCloseBtn) pdfCloseBtn.addEventListener('click', () => { pdfState.open = false; applyPdfLayout(); });
+if (pdfSelectBtn) pdfSelectBtn.addEventListener('click', () => {
+  setPdfSelectionMode(!pdfViewer?.isSelectionMode?.());
+});
 
 if (paneResizer) {
   paneResizer.addEventListener('mousedown', (e) => {
@@ -601,6 +690,14 @@ function renderUserAttachmentBubble(bubble, msg) {
 
 function renderUserChatBubble(bubble, msg) {
   bubble.innerHTML = '';
+  if (msg.selectionMeta) {
+    const chip = document.createElement('div');
+    chip.className = 'file-chip';
+    chip.innerHTML = '<span class="chip-icon">🎯</span><span class="chip-name"></span><span class="chip-size"></span>';
+    chip.querySelector('.chip-name').textContent = msg.selectionMeta.name || '선택 영역';
+    chip.querySelector('.chip-size').textContent = msg.selectionMeta.meta || '';
+    bubble.appendChild(chip);
+  }
   const body = document.createElement('div');
   body.className = 'user-text';
   body.textContent = msg.text || '';
@@ -1063,7 +1160,10 @@ function handleSseEvent(payload, msgId) {
 // ---------------- 채팅 ----------------
 
 async function sendChat(question) {
-  const userMsg = addMessage({ id: uid(), role: 'user', kind: 'chat', text: question });
+  const selection = state.pendingPdfSelection;
+  const selectionPayload = selectionRequestPayload(selection);
+  const selectionMetaForBubble = selection ? selectionSummary(selection) : null;
+  const userMsg = addMessage({ id: uid(), role: 'user', kind: 'chat', text: question, selectionMeta: selectionMetaForBubble });
   const assistantMsg = addMessage({
     id: uid(), role: 'assistant', kind: 'chat', status: 'loading',
   });
@@ -1077,6 +1177,7 @@ async function sendChat(question) {
     const body = state.mode === 'paper' && state.currentPaperId
       ? { question }
       : { sessionId: state.sessionId, question };
+    if (selectionPayload) body.selection = selectionPayload;
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1086,6 +1187,7 @@ async function sendChat(question) {
     try { json = await res.json(); } catch { /* ignore */ }
     if (res.ok && json && typeof json.answer === 'string') {
       updateMessage(assistantMsg.id, { status: 'done', text: json.answer, citations: json.citations || [] });
+      clearPdfSelection();
     } else if (res.status === 410) {
       state.sessionId = null;
       updateComposerMode();
@@ -1096,22 +1198,26 @@ async function sendChat(question) {
       newAnalysisBtn.classList.add('highlight');
       // 입력 복원
       composerInput.value = question;
+      if (selection) setPdfSelection(selection);
       autoGrow();
     } else if (res.status === 401) {
       const m = (json && json.error) || '로그인이 필요합니다.';
       updateMessage(assistantMsg.id, { status: 'error', error: m });
       composerInput.value = question;
+      if (selection) setPdfSelection(selection);
       autoGrow();
       fetchAuthStatus(true);
     } else {
       const m = (json && json.error) || `요청 실패 (${res.status})`;
       updateMessage(assistantMsg.id, { status: 'error', error: m });
       composerInput.value = question;
+      if (selection) setPdfSelection(selection);
       autoGrow();
     }
   } catch (err) {
     updateMessage(assistantMsg.id, { status: 'error', error: `네트워크 오류: ${err.message}` });
     composerInput.value = question;
+    if (selection) setPdfSelection(selection);
     autoGrow();
   } finally {
     state.busy = false;
@@ -1153,7 +1259,8 @@ async function onSend() {
     return;
   }
 
-  if (!state.sessionId) {
+  const canChatWithPaper = state.mode === 'paper' && !!state.currentPaperId && !!state.currentAnalysisId;
+  if (!state.sessionId && !canChatWithPaper) {
     setComposerHint('먼저 PDF를 첨부하세요.', true);
     return;
   }
@@ -1171,12 +1278,14 @@ function clearConversation() {
   state.messages = [];
   state.busy = false;
   state.pendingPdf = null;
+  state.pendingPdfSelection = null;
   state.currentPaperId = null;
   state.currentAnalysisId = null;
   state.currentVerifiedClaims = [];
   state.mode = 'new';
   messagesEl.innerHTML = '';
   clearAttachment();
+  clearPdfSelection();
   clearPdf();
   composerInput.value = '';
   autoGrow();
@@ -1367,6 +1476,10 @@ attachClear.addEventListener('click', () => {
   // 분석 시작 전 첨부를 취소하면 미리보기도 닫는다 (논문 열람 중에는 유지).
   if (!state.busy && state.mode === 'new') clearPdf();
 });
+if (selectionClear) selectionClear.addEventListener('click', () => {
+  clearPdfSelection();
+  setComposerHint('');
+});
 
 composerInput.addEventListener('input', () => {
   autoGrow();
@@ -1421,6 +1534,7 @@ settingsModal.querySelectorAll('[data-close]').forEach(el => {
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !settingsModal.hidden) closeSettings();
+  else if (e.key === 'Escape' && pdfViewer?.isSelectionMode?.()) setPdfSelectionMode(false);
 });
 settingsModal.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {

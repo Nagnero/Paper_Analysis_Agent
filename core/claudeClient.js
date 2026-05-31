@@ -2,11 +2,12 @@
 // Claude Code CLI를 subprocess로 호출하는 어댑터.
 // 사용자의 claude.ai Pro/Max 구독으로 동작 — API 키 사용 안 함, 토큰당 과금 없음.
 //
-// 구현 메모: Node의 stdin pipe는 Windows에서 `.cmd` 래퍼와의 사이에
-// 끊기는 케이스가 있어, 프롬프트를 임시 파일에 쓰고 셸 리다이렉트(`<`)로 전달.
-// argv 크기 한계(Windows ~32KB)도 동시에 우회됨.
+// 구현 메모: 프롬프트는 stdin pipe로 전달하고, 이미지 파일은 Read 도구가
+// 읽을 수 있도록 argv의 --add-dir 허용 경로로만 넘긴다. Windows에서는
+// npm .cmd 래퍼 실행을 위해 shell을 켜되, 인자는 분리된 argv로 유지한다.
 import { spawn } from 'node:child_process';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -27,41 +28,68 @@ function safeModel(model) {
 // Haiku 등 미지원 모델은 빈 effort가 들어오므로 플래그를 붙이지 않는다.
 const CLAUDE_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
 
+function safeImagePaths(imagePaths = []) {
+  if (!Array.isArray(imagePaths)) return [];
+  return imagePaths.map((imagePath) => {
+    if (typeof imagePath !== 'string' || !imagePath) {
+      throw new Error('imagePaths must contain non-empty strings');
+    }
+    if (imagePath.includes('\0') || !path.isAbsolute(imagePath)) {
+      throw new Error('imagePaths must be absolute safe paths');
+    }
+    if (!existsSync(imagePath)) throw new Error(`이미지 파일을 찾을 수 없습니다: ${imagePath}`);
+    return imagePath;
+  });
+}
+
 /**
  * Claude CLI 호출. JSON 응답에서 result 필드의 텍스트를 반환.
  * @param {string} prompt
- * @param {{ systemPrompt?: string, timeoutMs?: number, sessionId?: string, resume?: string, model?: string, onMeta?: (meta: {usage?: object, durationMs: number, sessionIdFromResponse?: string}) => void }} opts
+ * @param {{ systemPrompt?: string, timeoutMs?: number, sessionId?: string, resume?: string, model?: string, imagePaths?: string[], onMeta?: (meta: {usage?: object, durationMs: number, sessionIdFromResponse?: string}) => void }} opts
  * @returns {Promise<string>}
  */
 export async function callClaude(prompt, opts = {}) {
   const timeoutMs = opts.timeoutMs ?? 600_000;
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'kpac-claude-'));
-  const promptFile = path.join(tempDir, 'prompt.txt');
 
   try {
-    await writeFile(promptFile, prompt, 'utf8');
+    const images = safeImagePaths(opts.imagePaths);
+    let finalPrompt = prompt;
+    if (images.length) {
+      finalPrompt = `${prompt}
 
-    const cmdParts = [CLAUDE_BIN, '-p', '--output-format', 'json'];
-    if (opts.systemPrompt) {
-      const escaped = opts.systemPrompt.replace(/"/g, '\\"');
-      cmdParts.push('--system-prompt', `"${escaped}"`);
+## 로컬 선택 영역 이미지
+아래 로컬 이미지 파일을 Read 도구로 읽고, 이미지 내용을 선택 영역 질문의 1차 근거로 사용하세요.
+${images.map((imagePath, i) => `- image ${i + 1}: ${imagePath}`).join('\n')}`;
     }
-    if (opts.sessionId) cmdParts.push('--session-id', opts.sessionId);
-    if (opts.resume) cmdParts.push('--resume', opts.resume);
+
+    const args = ['-p', '--output-format', 'json'];
+    if (opts.systemPrompt) {
+      args.push('--system-prompt', opts.systemPrompt);
+    }
+    if (opts.sessionId) args.push('--session-id', opts.sessionId);
+    if (opts.resume) args.push('--resume', opts.resume);
     if (opts.model) {
       const m = safeModel(opts.model);
-      if (m) cmdParts.push('--model', m);
+      if (m) args.push('--model', m);
     }
     if (CLAUDE_EFFORTS.has(opts.reasoningEffort)) {
-      cmdParts.push('--effort', opts.reasoningEffort);
+      args.push('--effort', opts.reasoningEffort);
     }
-    const command = `${cmdParts.join(' ')} < "${promptFile}"`;
+    if (images.length) {
+      for (const dir of [...new Set(images.map(imagePath => path.dirname(imagePath)))]) {
+        args.push('--add-dir', dir);
+      }
+      args.push('--allowedTools', 'Read');
+    }
 
     const startedAt = Date.now();
     return await new Promise((resolve, reject) => {
-      const proc = spawn(command, [], {
-        shell: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
+      const proc = spawn(CLAUDE_BIN, args, {
+        // npm-installed CLIs may resolve to .cmd wrappers on Windows; keep argv
+        // args separate while allowing cmd.exe wrapper execution there.
+        shell: process.platform === 'win32',
+        stdio: ['pipe', 'pipe', 'pipe'],
         cwd: tempDir,
       });
 
@@ -71,6 +99,7 @@ export async function callClaude(prompt, opts = {}) {
       let stdout = '', stderr = '';
       proc.stdout.on('data', d => { stdout += d; });
       proc.stderr.on('data', d => { stderr += d; });
+      proc.stdin.end(finalPrompt, 'utf8');
 
       const killer = setTimeout(() => {
         proc.kill('SIGKILL');
@@ -162,7 +191,7 @@ export async function checkAuthStatus() {
  * JSON 응답을 강제. 1회 재시도.
  * @param {string} prompt
  * @param {string} schemaHint
- * @param {{ systemPrompt?: string, timeoutMs?: number, sessionId?: string, resume?: string, model?: string, onMeta?: (meta: {usage?: object, durationMs: number, sessionIdFromResponse?: string}) => void }} [opts]
+ * @param {{ systemPrompt?: string, timeoutMs?: number, sessionId?: string, resume?: string, model?: string, imagePaths?: string[], onMeta?: (meta: {usage?: object, durationMs: number, sessionIdFromResponse?: string}) => void }} [opts]
  */
 export async function callClaudeJson(prompt, schemaHint, opts = {}) {
   const fullPrompt = `${prompt}\n\n반드시 다음 JSON 스키마에 맞게만 응답하세요. JSON 외 다른 텍스트는 절대 포함하지 마세요.\n\`\`\`json\n${schemaHint}\n\`\`\``;

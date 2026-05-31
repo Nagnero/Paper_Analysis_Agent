@@ -127,6 +127,11 @@ body.resizing .pane-resizer { background: var(--accent); }
   cursor: pointer;
 }
 .pdf-head-btn:hover { background: var(--surface-2); }
+.pdf-select-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
 .pdf-pane-body {
   flex: 1;
   min-height: 0;
@@ -142,6 +147,24 @@ body.resizing .pane-resizer { background: var(--accent); }
   box-shadow: 0 1px 6px rgba(0, 0, 0, 0.4);
 }
 .pdf-page canvas { display: block; }
+.pdf-selection-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  pointer-events: none;
+  cursor: crosshair;
+}
+.pdf-selection-layer.active {
+  pointer-events: auto;
+}
+.pdf-selection-box {
+  position: absolute;
+  border: 2px solid var(--accent);
+  background: rgba(78, 161, 255, 0.18);
+  box-shadow: 0 0 0 1px rgba(78, 161, 255, 0.35);
+  border-radius: 2px;
+  pointer-events: none;
+}
 /* 인용 하이라이트 (텍스트 레이어 span 위 반투명 박스) */
 .pdf-hl {
   background: rgba(255, 213, 0, 0.45);
@@ -905,6 +928,26 @@ button { font-family: inherit; }
   text-overflow: ellipsis;
 }
 .attach-chip .chip-size { color: var(--muted); font-size: 11.5px; }
+.selection-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  max-width: 100%;
+  font-size: 12.5px;
+}
+.selection-chip[hidden] { display: none; }
+.selection-chip .chip-name {
+  max-width: 380px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.selection-chip .chip-size { color: var(--muted); font-size: 11.5px; }
 .chip-x {
   background: transparent;
   color: var(--muted);
