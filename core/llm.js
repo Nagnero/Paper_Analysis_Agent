@@ -5,7 +5,7 @@ import { callCodex, callCodexJson } from './codexCli.js';
 
 /**
  * @param {string} prompt
- * @param {{ backend?: 'claude'|'codex', model?: string, reasoningEffort?: string }} opts
+ * @param {{ backend?: 'claude'|'codex', model?: string, reasoningEffort?: string, imagePaths?: string[] }} opts
  */
 export async function callLLM(prompt, opts = {}) {
   const backend = opts.backend || 'claude';
@@ -16,7 +16,7 @@ export async function callLLM(prompt, opts = {}) {
 /**
  * @param {string} prompt
  * @param {string} schemaHint
- * @param {{ backend?: 'claude'|'codex', model?: string, reasoningEffort?: string }} [opts]
+ * @param {{ backend?: 'claude'|'codex', model?: string, reasoningEffort?: string, imagePaths?: string[] }} [opts]
  */
 export async function callLLMJson(prompt, schemaHint, opts = {}) {
   const backend = opts.backend || 'claude';
