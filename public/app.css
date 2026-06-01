@@ -157,13 +157,38 @@ body.resizing .pane-resizer { background: var(--accent); }
 .pdf-selection-layer.active {
   pointer-events: auto;
 }
+.pdf-figure-candidate {
+  position: absolute;
+  z-index: 1;
+  border: 1.5px solid transparent;
+  border-radius: 4px;
+  padding: 0;
+  background: transparent;
+  pointer-events: auto;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+.pdf-figure-candidate:hover,
+.pdf-figure-candidate:focus-visible {
+  opacity: 1;
+  outline: none;
+  border-color: var(--accent);
+  background: rgba(78, 161, 255, 0.12);
+  box-shadow: 0 0 0 1px rgba(78, 161, 255, 0.28);
+}
 .pdf-selection-box {
   position: absolute;
+  z-index: 2;
   border: 2px solid var(--accent);
   background: rgba(78, 161, 255, 0.18);
   box-shadow: 0 0 0 1px rgba(78, 161, 255, 0.35);
   border-radius: 2px;
   pointer-events: none;
+}
+.pdf-selection-box--figure {
+  border-style: solid;
+  background: rgba(78, 161, 255, 0.14);
 }
 /* 인용 하이라이트 (텍스트 레이어 span 위 반투명 박스) */
 .pdf-hl {

@@ -341,11 +341,14 @@ function selectionSummary(selection) {
   if (!selection) return { name: '', meta: '' };
   const page = Number(selection.page) || '?';
   const text = (selection.text || '').replace(/\s+/g, ' ').trim();
-  const name = text ? text.slice(0, 80) : `p.${page} 선택 영역`;
+  const isFigure = selection.source === 'figure';
+  const sourceLabel = isFigure ? 'Figure' : '선택 영역';
   const size = selection.image ? `${selection.image.width}×${selection.image.height}` : '';
   return {
-    name,
-    meta: text ? `p.${page} · 텍스트+이미지` : `p.${page} · 이미지 ${size}`.trim(),
+    name: text ? text.slice(0, 80) : `p.${page} ${sourceLabel}`,
+    meta: text
+      ? `p.${page} · ${isFigure ? 'figure 후보' : '텍스트+이미지'}`
+      : `p.${page} · ${isFigure ? 'figure 후보' : '이미지'} ${size}`.trim(),
   };
 }
 
@@ -353,6 +356,7 @@ function selectionRequestPayload(selection) {
   if (!selection) return null;
   return {
     type: 'pdf-region',
+    source: selection.source || 'manual',
     page: selection.page,
     rect: selection.rect,
     text: selection.text || '',

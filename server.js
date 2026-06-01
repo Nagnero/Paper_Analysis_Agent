@@ -207,7 +207,8 @@ function selectionLabel(selection) {
   const size = finiteNumber(rect.width) && finiteNumber(rect.height)
     ? ` · ${Math.round(rect.width)}×${Math.round(rect.height)}`
     : '';
-  return `p.${selection.page} · 선택 영역${size}`;
+  const sourceLabel = selection.source === 'figure' ? 'Figure 후보' : '선택 영역';
+  return `p.${selection.page} · ${sourceLabel}${size}`;
 }
 
 async function preparePdfSelection(rawSelection) {
@@ -224,6 +225,7 @@ async function preparePdfSelection(rawSelection) {
   if (rect.width <= 0 || rect.height <= 0) throw requestError(400, 'selection.rect size invalid');
 
   const normalized = {
+    source: rawSelection.source === 'figure' ? 'figure' : 'manual',
     page,
     rect: {
       x: rect.x,
@@ -275,6 +277,7 @@ function selectedRegionContext(selection) {
   const rect = selection.rect;
   const lines = [
     '## 사용자가 PDF에서 선택한 영역',
+    `- source: ${selection.source === 'figure' ? 'figure 후보 클릭' : 'manual drag'}`,
     `- page: p.${selection.page}`,
     `- rectangle: x=${Math.round(rect.x)}, y=${Math.round(rect.y)}, width=${Math.round(rect.width)}, height=${Math.round(rect.height)} (${rect.units})`,
   ];

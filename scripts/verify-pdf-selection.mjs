@@ -17,6 +17,8 @@ assert.match(index, /id="pdfSelectBtn"/, 'PDF header must expose a selection-mod
 assert.match(index, /id="selectionChip"/, 'composer must expose a single pending-selection chip');
 assert.match(css, /\.pdf-selection-layer/, 'viewer must style an overlay layer above PDF pages');
 assert.match(css, /\.pdf-selection-layer\.active/, 'selection overlay must only capture pointer events in active mode');
+assert.match(css, /\.pdf-figure-candidate/, 'viewer must style hoverable figure candidates');
+assert.doesNotMatch(css, /\.pdf-table-candidate/, 'table auto-hover is intentionally disabled for now');
 assert.match(css, /\.selection-chip/, 'composer chip must be styled separately from plain text input');
 
 // Frontend contract: one pending selection is captured, shown, sent, retried, and cleared.
@@ -31,6 +33,14 @@ assert.match(app, /try[\s\S]*clearPdfSelection\(\)[\s\S]*catch \(err\)/, 'succes
 assert.match(pdfViewer, /className = 'pdf-selection-layer'/, 'each rendered page must receive a selection overlay');
 assert.match(pdfViewer, /pageDiv\.querySelectorAll\('\.textLayer span'\)/, 'selection must extract overlapping text-layer spans');
 assert.match(pdfViewer, /crop\.toDataURL\('image\/png'\)/, 'selection must capture a PNG crop for figure/image questions');
+assert.match(pdfViewer, /FIGURE_CAPTION_RE/, 'viewer must detect figure captions as lazy candidates');
+assert.doesNotMatch(pdfViewer, /TABLE_CAPTION_RE/, 'table auto-hover is intentionally disabled for now');
+assert.match(pdfViewer, /function captionBlocksForPage\(pageDiv\)/, 'viewer must merge multi-line figure descriptions into one candidate');
+assert.match(pdfViewer, /function isCaptionContinuation/, 'viewer must detect caption continuation lines');
+assert.match(pdfViewer, /function buildFigureCandidates\(pageDiv\)/, 'viewer must build lazy figure candidates per rendered page');
+assert.match(pdfViewer, /className = 'pdf-figure-candidate'/, 'figure candidates must be clickable overlay targets');
+assert.match(pdfViewer, /scanInkBounds\(pageDiv, search, \{ direction: captionNearTop \? 'top' : 'bottom' \}\)/, 'figure candidates should use directional rendered-page ink bounds when possible');
+assert.match(pdfViewer, /selectRegionFromRect\(pageDiv, rect, 'figure'\)/, 'clicking a figure candidate must reuse the selection payload flow');
 assert.match(pdfViewer, /function setSelectionMode\(enabled\)/, 'viewer must expose selection-mode toggling');
 assert.match(pdfViewer, /function onRegionSelected\(callback\)/, 'viewer must expose a region-selected callback');
 assert.match(pdfViewer, /function clearSelection\(\)/, 'viewer must expose selection cleanup');
@@ -49,7 +59,9 @@ assert.match(server, /selectedRegionContext\(preparedSelection\)/, 'LLM prompt m
 assert.match(server, /callOpts\.imagePaths = \[preparedSelection\.imagePath\]/, 'LLM calls must receive the temp image path when present');
 assert.match(server, /questionWithSelectionMetadata\(question, preparedSelection\)/, 'library history must store selection metadata rather than image data');
 assert.doesNotMatch(server, /appendChatTurn\([^)]*body\.selection/s, 'chat persistence must not store raw selection payloads');
-assert.match(server, /return `p\.\$\{selection\.page\} · 선택 영역/, 'persisted selection label must be metadata-only');
+assert.match(server, /Figure 후보/, 'persisted selection label may identify figure candidates without raw image data');
+assert.doesNotMatch(server, /Table 후보/, 'table auto-hover metadata is intentionally disabled for now');
+assert.match(server, /sourceLabel\}\$\{size\}/, 'persisted selection label must be metadata-only');
 assert.doesNotMatch(server, /selectionLabel\(selection\) \{[\s\S]*clampText\(selection\.text/, 'persisted selection label must not store selected text preview');
 
 // LLM adapter contract: image paths are explicit argv values, not shell-interpolated strings.
