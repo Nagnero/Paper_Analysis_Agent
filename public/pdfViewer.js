@@ -8,6 +8,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = '/vendor/pdfjs/pdf.worker.min.mjs';
 const SCALE_MIN = 0.4;
 const SCALE_MAX = 3;
 const WIDTH_GUTTER = 24; // 좌우 여백/스크롤바 여유(px)
+const PDFJS_VERBOSITY = pdfjsLib.VerbosityLevel?.ERRORS ?? 0;
 
 // ---- 텍스트 정규화 (인덱스/쿼리 공통) ----
 // 단일 문자를 정규화한 문자열로. 빈 문자열(soft hyphen, 결합 분음)일 수 있음.
@@ -29,6 +30,8 @@ function normalizeQuery(s) {
 }
 
 const isWord = (ch) => !!ch && /\w/.test(ch);
+const isSearchChar = (ch) => !!ch && /[\p{L}\p{N}]/u.test(ch);
+const tokenRe = /[\p{L}\p{N}]{3,}/gu;
 
 export function createPdfViewer(container) {
   let doc = null;
@@ -39,6 +42,11 @@ export function createPdfViewer(container) {
   let currentScale = 1;
   let lastSource = null;     // relayout 시 재사용
   let relayoutTimer = 0;
+
+  function documentSource(source) {
+    if (typeof source === 'string') return { url: source, verbosity: PDFJS_VERBOSITY };
+    return { ...source, verbosity: PDFJS_VERBOSITY };
+  }
 
   function clearContainer() {
     container.innerHTML = '';
@@ -172,7 +180,18 @@ export function createPdfViewer(container) {
       compact += normStr[i];
       compactToNorm.push(i);
     }
-    index = { norm: normStr, map, compact, compactToNorm, pageOfNode };
+
+    // loose: 공백/구두점 차이 때문에 verbatim quote가 어긋날 때를 위한 보조 인덱스.
+    // 하이라이트 범위는 loose → compact → norm으로 되돌린다.
+    let loose = '';
+    const looseToCompact = [];
+    for (let i = 0; i < compact.length; i++) {
+      if (!isSearchChar(compact[i])) continue;
+      loose += compact[i];
+      looseToCompact.push(i);
+    }
+
+    index = { norm: normStr, map, compact, compactToNorm, loose, looseToCompact, pageOfNode };
   }
 
   function pageOfNormPos(normPos) {
@@ -197,6 +216,123 @@ export function createPdfViewer(container) {
       from = idx + 1;
     }
     return hits;
+  }
+
+  function findAllInLoose(q) {
+    const looseQ = Array.from(q).filter(isSearchChar).join('');
+    if (looseQ.length < 8) return [];
+    const hits = [];
+    let from = 0;
+    while (true) {
+      const idx = index.loose.indexOf(looseQ, from);
+      if (idx === -1) break;
+      const cs = index.looseToCompact[idx];
+      const last = index.looseToCompact[idx + looseQ.length - 1];
+      if (cs != null && last != null) hits.push({ cs, ce: last + 1 });
+      from = idx + 1;
+    }
+    return hits;
+  }
+
+  function chooseBySourcePage(ranges, sourcePage) {
+    if (!ranges.length) return null;
+    if (!sourcePage || ranges.length === 1) return ranges[0];
+    let best = ranges[0], bestDist = Infinity;
+    for (const r of ranges) {
+      const ns = index.compactToNorm[r.cs];
+      const pg = ns != null ? pageOfNormPos(ns) : null;
+      const dist = pg ? Math.abs(pg - sourcePage) : Infinity;
+      if (dist < bestDist) { bestDist = dist; best = r; }
+    }
+    return best;
+  }
+
+  function compactRangeForPage(pageNo) {
+    if (!pageNo) return null;
+    let start = null;
+    let end = null;
+    for (let ci = 0; ci < index.compactToNorm.length; ci++) {
+      const pg = pageOfNormPos(index.compactToNorm[ci]);
+      if (pg !== pageNo) continue;
+      if (start == null) start = ci;
+      end = ci + 1;
+    }
+    return start == null ? null : { start, end };
+  }
+
+  function significantTokens(q) {
+    const tokens = Array.from(new Set(q.match(tokenRe) || []));
+    return tokens
+      .filter(t => t.length >= 4)
+      .sort((a, b) => b.length - a.length)
+      .slice(0, 12);
+  }
+
+  function looseText(s) {
+    return Array.from(s).filter(isSearchChar).join('');
+  }
+
+  function sentenceRangesInCompact(start, end) {
+    const ranges = [];
+    let s = start;
+    for (let i = start; i < end; i++) {
+      const ch = index.compact[i];
+      const next = index.compact[i + 1] || '';
+      const boundary = /[.!?。！？]/.test(ch) && (next === '' || /\s/.test(next) || i + 1 >= end);
+      if (boundary) {
+        if (i + 1 - s >= 12) ranges.push({ cs: s, ce: i + 1 });
+        s = i + 1;
+        while (s < end && /\s/.test(index.compact[s])) s++;
+      }
+    }
+    if (end - s >= 12) ranges.push({ cs: s, ce: end });
+    return ranges;
+  }
+
+  // 정확/loose/fuzzy 검색이 모두 실패했을 때, 출처 페이지 안에서
+  // quote 토큰과 가장 많이 겹치는 "문장"만 선택한다. 페이지 전체는 강조하지 않는다.
+  function approximateSentenceFind(q, sourcePage) {
+    const pageRange = compactRangeForPage(sourcePage);
+    if (!pageRange) return null;
+    const tokens = significantTokens(q);
+    if (tokens.length < 2) return null;
+    const candidates = sentenceRangesInCompact(pageRange.start, pageRange.end);
+    let best = null;
+    let bestScore = 0;
+    let bestMatches = 0;
+    for (const r of candidates) {
+      const cand = looseText(index.compact.slice(r.cs, r.ce));
+      let score = 0;
+      let matches = 0;
+      for (const t of tokens) {
+        const lt = looseText(t);
+        if (lt && cand.includes(lt)) {
+          matches += 1;
+          score += lt.length;
+        }
+      }
+      if (score > bestScore) {
+        best = r;
+        bestScore = score;
+        bestMatches = matches;
+      }
+    }
+    const minMatches = Math.max(2, Math.ceil(tokens.length * 0.35));
+    return best && bestMatches >= minMatches ? best : null;
+  }
+
+  function selectQuoteRange(quote, opts = {}) {
+    if (!doc || !index) return null;
+    const q = normalizeQuery(quote || '');
+    if (!q) return null;
+
+    const hits = findAllInCompact(q).map(cs => ({ cs, ce: cs + q.length }));
+    if (hits.length) return chooseBySourcePage(hits, opts.sourcePage);
+
+    const looseHits = findAllInLoose(q);
+    return chooseBySourcePage(looseHits, opts.sourcePage)
+      || fuzzyFind(q)
+      || approximateSentenceFind(q, opts.sourcePage);
   }
 
   // 가장 큰 연속 토큰 구간(≥60%)이 그대로 등장하는지 (best-effort 폴백)
@@ -264,8 +400,7 @@ export function createPdfViewer(container) {
     lastSource = source;
     const token = loadToken;
     let task;
-    if (typeof source === 'string') task = pdfjsLib.getDocument({ url: source });
-    else task = pdfjsLib.getDocument(source); // { data: ArrayBuffer }
+    task = pdfjsLib.getDocument(documentSource(source)); // string URL or { data: ArrayBuffer }
     let loaded;
     try {
       loaded = await task.promise;
@@ -288,40 +423,30 @@ export function createPdfViewer(container) {
 
   function highlightQuote(quote, opts = {}) {
     if (!doc || !index) return { found: false };
-    const q = normalizeQuery(quote || '');
-    if (!q) return { found: false };
-
-    let chosen = null;
-    const hits = findAllInCompact(q);
-    if (hits.length) {
-      let cs = hits[0];
-      if (opts.sourcePage && hits.length > 1) {
-        let best = hits[0], bestDist = Infinity;
-        for (const h of hits) {
-          const ns = index.compactToNorm[h];
-          const pg = ns != null ? pageOfNormPos(ns) : null;
-          const dist = pg ? Math.abs(pg - opts.sourcePage) : Infinity;
-          if (dist < bestDist) { bestDist = dist; best = h; }
-        }
-        cs = best;
-      }
-      chosen = { cs, ce: cs + q.length };
-    } else {
-      chosen = fuzzyFind(q);
-    }
+    const chosen = selectQuoteRange(quote, opts);
     if (!chosen) {
-      if (opts.sourcePage) scrollToPage(opts.sourcePage);
-      return { found: false };
+      if (opts.sourcePage) {
+        scrollToPage(opts.sourcePage);
+        return { found: false, navigated: true, highlighted: false, page: opts.sourcePage };
+      }
+      return { found: false, navigated: false };
     }
     const mark = applyHighlight(chosen.cs, chosen.ce);
     if (!mark) {
-      if (opts.sourcePage) scrollToPage(opts.sourcePage);
-      return { found: false };
+      if (opts.sourcePage) {
+        scrollToPage(opts.sourcePage);
+        return { found: false, navigated: true, highlighted: false, page: opts.sourcePage };
+      }
+      return { found: false, navigated: false };
     }
     mark.scrollIntoView({ block: 'center', behavior: 'smooth' });
     flash(mark);
     const ns = index.compactToNorm[chosen.cs];
     return { found: true, page: ns != null ? pageOfNormPos(ns) : null };
+  }
+
+  function canHighlightQuote(quote, opts = {}) {
+    return !!selectQuoteRange(quote, opts);
   }
 
   function scrollToPage(pageNo) {
@@ -341,5 +466,5 @@ export function createPdfViewer(container) {
 
   function isLoaded() { return !!doc; }
 
-  return { load, destroy, highlightQuote, scrollToPage, relayout, isLoaded };
+  return { load, destroy, highlightQuote, canHighlightQuote, scrollToPage, relayout, isLoaded };
 }

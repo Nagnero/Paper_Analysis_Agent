@@ -193,6 +193,33 @@ body.resizing .pdf-pane-body { pointer-events: none; }
 .evidence-ref .ref-loupe { font-size: 11px; opacity: 0.6; margin-left: 3px; }
 .evidence-ref:hover .ref-loupe { opacity: 1; }
 
+/* 리포트/채팅 본문 인라인 숫자 근거 버튼 */
+.evidence-ref-inline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.45em;
+  height: 1.45em;
+  margin: 0 2px;
+  padding: 0 4px;
+  border: 1px solid rgba(122, 162, 255, 0.45);
+  border-radius: 999px;
+  background: rgba(122, 162, 255, 0.08);
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.82em;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  vertical-align: 0.08em;
+}
+.evidence-ref-inline:hover,
+.evidence-ref-inline:focus-visible {
+  background: rgba(122, 162, 255, 0.16);
+  border-color: var(--accent);
+  outline: none;
+}
+
 /* 토스트 */
 .toast {
   position: fixed;

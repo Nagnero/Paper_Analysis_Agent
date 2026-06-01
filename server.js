@@ -18,6 +18,7 @@ import * as authStatus from './core/authStatus.js';
 import * as library from './core/library.js';
 import * as fileManager from './core/fileManager.js';
 import { parsePdf } from './utils/parsePdf.js';
+import { buildCitationRefMap, citationRefsForText, stripInvalidCitationMarkers } from './public/citationContract.js';
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 const SESSION_TTL_MS = 60 * 60 * 1000;
@@ -39,6 +40,7 @@ const STATIC = {
   '/app.css': { file: 'public/app.css', type: 'text/css; charset=utf-8' },
   '/app.js': { file: 'public/app.js', type: 'application/javascript; charset=utf-8' },
   '/pdfViewer.js': { file: 'public/pdfViewer.js', type: 'application/javascript; charset=utf-8' },
+  '/citationContract.js': { file: 'public/citationContract.js', type: 'application/javascript; charset=utf-8' },
   '/setup': { file: 'public/setup.html', type: 'text/html; charset=utf-8' },
 };
 
@@ -83,6 +85,7 @@ async function runAndStream(pdfPath, res, emphasis, sourceFile, { copyPdfMode = 
       paperTitle: parsed.title,
       paperText,
       report,
+      verifiedClaims,
       chatStartedByBackend: { claude: false, codex: false },
     });
     sseWrite(res, { stage: 'done', message: '완료', report, sessionId, analyst, verifiedClaims, metrics, directive, auditResults, paperId, analysisId });
@@ -121,6 +124,29 @@ function missingLoginBackend(authResult, backends) {
 function jsonResponse(res, status, payload) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(payload));
+}
+
+function citationClaimsForPrompt(verifiedClaims) {
+  return [...buildCitationRefMap(verifiedClaims).values()]
+    .map(c => `- id: ${c.id}\n  claim: ${c.text}\n  quote: ${c.quote}\n  source: ${c.sourceSection || 'section unknown'}${c.sourcePage ? `, p.${c.sourcePage}` : ''}`)
+    .join('\n');
+}
+
+function buildGroundedChatInstructions(verifiedClaims) {
+  const evidenceList = citationClaimsForPrompt(verifiedClaims);
+  if (!evidenceList) {
+    return `## 근거 인용 규칙
+- 사용 가능한 검증 claim ID가 없으므로 답변에 [[cite:<claimId>]] 마커를 쓰지 마세요.
+- 논문/리포트 컨텍스트에 근거가 없으면 모른다고 답하세요.`;
+  }
+  return `## 근거 인용 규칙
+- 논문 근거가 있는 핵심 문장 끝에 정확히 [[cite:<claimId>]] 마커를 붙이세요.
+- 아래 \"사용 가능한 검증 근거\" 목록에 있는 id만 사용할 수 있습니다.
+- 근거가 약하거나 목록에 없는 내용에는 마커를 붙이지 마세요.
+- 사용자는 UI에서 마커를 [n] 숫자 버튼으로 보게 되므로, (Section, p.X) 같은 괄호형 출처는 쓰지 마세요.
+
+## 사용 가능한 검증 근거
+${evidenceList}`;
 }
 
 async function readJsonBody(req) {
@@ -310,6 +336,8 @@ ${paperText ?? ''}
 ## 한국어 분석 리포트
 ${files.report ?? ''}
 
+${buildGroundedChatInstructions(files.claims)}
+
 --- 위는 컨텍스트 ---
 
 사용자 질문: ${question}`;
@@ -320,11 +348,13 @@ ${files.report ?? ''}
       reasoningEffort: chatCfg.reasoningEffort,
       timeoutMs: 600_000,
     };
-    const answer = await callLLM(promptText, callOpts);
+    const rawAnswer = await callLLM(promptText, callOpts);
+    const answer = stripInvalidCitationMarkers(rawAnswer, files.claims);
+    const citations = citationRefsForText(files.claims, answer);
 
     const modelTag = `${chatCfg.backend}${chatCfg.model ? '/' + chatCfg.model : ''}`;
     const { user: userRow, assistant: assistantRow } = await library.appendChatTurn(latest.id, question, answer, modelTag);
-    jsonResponse(res, 200, { answer, chats: [userRow, assistantRow] });
+    jsonResponse(res, 200, { answer, citations, chats: [userRow, assistantRow] });
   } catch (err) {
     jsonResponse(res, 500, { error: err.message });
   }
@@ -393,6 +423,8 @@ ${sess.paperText ?? ''}
 ## 한국어 분석 리포트
 ${sess.report ?? ''}
 
+${buildGroundedChatInstructions(sess.verifiedClaims)}
+
 --- 위는 컨텍스트 ---
 
 사용자 질문: ${question}`;
@@ -415,10 +447,12 @@ ${sess.report ?? ''}
   }
 
   try {
-    const answer = await callLLM(promptText, callOpts);
+    const rawAnswer = await callLLM(promptText, callOpts);
+    const answer = stripInvalidCitationMarkers(rawAnswer, sess.verifiedClaims);
     if (chatCfg.backend !== 'codex') sess.chatStartedByBackend[chatCfg.backend] = true;
+    const citations = citationRefsForText(sess.verifiedClaims, answer);
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ answer }));
+    res.end(JSON.stringify({ answer, citations }));
   } catch (err) {
     res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ error: err.message }));
