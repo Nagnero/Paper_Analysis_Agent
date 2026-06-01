@@ -5,7 +5,8 @@
 // 세션/resume은 v1에서 미지원 (codex 세션 API가 안정화되지 않았다고 가정) —
 // opts.sessionId / opts.resume 은 무시. chat은 백엔드가 codex면 매번 fresh 호출.
 import { spawn } from 'node:child_process';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { CODEX_MODEL, CODEX_REASONING_EFFORTS, DEFAULT_CODEX_REASONING_EFFORT } from './llmConfig.js';
@@ -35,30 +36,45 @@ function safeReasoningEffort(reasoningEffort) {
   return value;
 }
 
+function safeImagePaths(imagePaths = []) {
+  if (!Array.isArray(imagePaths)) return [];
+  return imagePaths.map((imagePath) => {
+    if (typeof imagePath !== 'string' || !imagePath) {
+      throw new Error('imagePaths must contain non-empty strings');
+    }
+    if (imagePath.includes('\0') || !path.isAbsolute(imagePath)) {
+      throw new Error('imagePaths must be absolute safe paths');
+    }
+    if (!existsSync(imagePath)) throw new Error(`이미지 파일을 찾을 수 없습니다: ${imagePath}`);
+    return imagePath;
+  });
+}
+
 /**
  * codex CLI 호출. stdout 전체를 응답 텍스트로 반환.
  * @param {string} prompt
- * @param {{ timeoutMs?: number, model?: string, reasoningEffort?: string, sessionId?: string, resume?: string, onMeta?: (meta: {usage?: object, durationMs: number}) => void }} opts
+ * @param {{ timeoutMs?: number, model?: string, reasoningEffort?: string, imagePaths?: string[], sessionId?: string, resume?: string, onMeta?: (meta: {usage?: object, durationMs: number}) => void }} opts
  * @returns {Promise<string>}
  */
 export async function callCodex(prompt, opts = {}) {
   const timeoutMs = opts.timeoutMs ?? 600_000;
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'kpac-codex-'));
-  const promptFile = path.join(tempDir, 'prompt.txt');
 
   try {
-    await writeFile(promptFile, prompt, 'utf8');
-
     const model = safeModel(opts.model || CODEX_MODEL);
     const reasoningEffort = safeReasoningEffort(opts.reasoningEffort);
-    const cmdParts = [CODEX_BIN, 'exec', '--skip-git-repo-check', '--model', model, '-c', `model_reasoning_effort=${reasoningEffort}`];
-    const command = `${cmdParts.join(' ')} < "${promptFile}"`;
+    const images = safeImagePaths(opts.imagePaths);
+    const args = ['exec', '--skip-git-repo-check', '--model', model, '-c', `model_reasoning_effort=${reasoningEffort}`];
+    for (const imagePath of images) args.push('--image', imagePath);
+    args.push('-');
 
     const startedAt = Date.now();
     return await new Promise((resolve, reject) => {
-      const proc = spawn(command, [], {
-        shell: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
+      const proc = spawn(CODEX_BIN, args, {
+        // npm-installed CLIs may resolve to .cmd wrappers on Windows; keep argv
+        // args separate while allowing cmd.exe wrapper execution there.
+        shell: process.platform === 'win32',
+        stdio: ['pipe', 'pipe', 'pipe'],
         cwd: tempDir,
       });
 
@@ -68,6 +84,7 @@ export async function callCodex(prompt, opts = {}) {
       let stdout = '', stderr = '';
       proc.stdout.on('data', d => { stdout += d; });
       proc.stderr.on('data', d => { stderr += d; });
+      proc.stdin.end(prompt, 'utf8');
 
       const killer = setTimeout(() => {
         proc.kill('SIGKILL');
@@ -105,7 +122,7 @@ export async function callCodex(prompt, opts = {}) {
  * JSON 응답을 강제. 1회 재시도. codex는 JSON 출력 옵션이 없을 수 있어 프롬프트로만 강제.
  * @param {string} prompt
  * @param {string} schemaHint
- * @param {{ timeoutMs?: number, model?: string, reasoningEffort?: string, onMeta?: (meta: {usage?: object, durationMs: number}) => void }} [opts]
+ * @param {{ timeoutMs?: number, model?: string, reasoningEffort?: string, imagePaths?: string[], onMeta?: (meta: {usage?: object, durationMs: number}) => void }} [opts]
  */
 export async function callCodexJson(prompt, schemaHint, opts = {}) {
   const fullPrompt = `${prompt}\n\n반드시 다음 JSON 스키마에 맞게만 응답하세요. JSON 외 다른 텍스트는 절대 포함하지 마세요.\n\`\`\`json\n${schemaHint}\n\`\`\``;

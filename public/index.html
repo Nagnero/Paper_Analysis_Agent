@@ -59,6 +59,12 @@
             <span id="attachSize" class="chip-size"></span>
             <button type="button" id="attachClear" class="chip-x" aria-label="첨부 제거">×</button>
           </div>
+          <div id="selectionChip" class="selection-chip" hidden>
+            <span class="chip-icon">🎯</span>
+            <span id="selectionName" class="chip-name"></span>
+            <span id="selectionMeta" class="chip-size"></span>
+            <button type="button" id="selectionClear" class="chip-x" aria-label="선택 영역 제거">×</button>
+          </div>
           <div id="composerRow" class="composer-row">
             <textarea id="composerInput" class="composer-input" rows="1" placeholder="후속 질문을 입력하세요..."></textarea>
             <button type="button" id="sendBtn" class="send-btn" title="보내기" disabled>↑</button>
@@ -72,6 +78,7 @@
           <div class="pdf-pane-head">
             <span id="pdfTitle" class="pdf-title">논문</span>
             <span class="spacer"></span>
+            <button type="button" id="pdfSelectBtn" class="pdf-head-btn pdf-select-btn" title="PDF 영역 선택" aria-label="PDF 영역 선택">▣</button>
             <a id="pdfOpenExternal" class="pdf-head-btn" href="#" target="_blank" rel="noopener" title="새 창에서 열기">↗</a>
             <button type="button" id="pdfCloseBtn" class="pdf-head-btn" title="패널 닫기" aria-label="패널 닫기">×</button>
           </div>

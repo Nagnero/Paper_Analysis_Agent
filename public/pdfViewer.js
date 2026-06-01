@@ -32,6 +32,7 @@ function normalizeQuery(s) {
 const isWord = (ch) => !!ch && /\w/.test(ch);
 const isSearchChar = (ch) => !!ch && /[\p{L}\p{N}]/u.test(ch);
 const tokenRe = /[\p{L}\p{N}]{3,}/gu;
+const FIGURE_CAPTION_RE = /^\s*(?:fig(?:ure)?\.?|그림)\s*(?:\d+|[ivxlcdm]+)[a-z]?(?:\s|[.:：-])/i;
 
 export function createPdfViewer(container) {
   let doc = null;
@@ -42,6 +43,9 @@ export function createPdfViewer(container) {
   let currentScale = 1;
   let lastSource = null;     // relayout 시 재사용
   let relayoutTimer = 0;
+  let selectionMode = false;
+  let selectionHandler = null;
+  let activeSelection = null;
 
   function documentSource(source) {
     if (typeof source === 'string') return { url: source, verbosity: PDFJS_VERBOSITY };
@@ -50,6 +54,17 @@ export function createPdfViewer(container) {
 
   function clearContainer() {
     container.innerHTML = '';
+  }
+
+  function clearSelectionVisuals() {
+    container.querySelectorAll('.pdf-selection-box').forEach(el => el.remove());
+    activeSelection = null;
+  }
+
+  function setSelectionLayersActive() {
+    container.querySelectorAll('.pdf-selection-layer').forEach(layer => {
+      layer.classList.toggle('active', selectionMode);
+    });
   }
 
   function unwrapHighlights() {
@@ -65,6 +80,8 @@ export function createPdfViewer(container) {
 
   async function destroy() {
     loadToken++;
+    selectionMode = false;
+    clearSelectionVisuals();
     unwrapHighlights();
     for (const t of renderTasks) {
       try { t.cancel(); } catch { /* ignore */ }
@@ -106,6 +123,11 @@ export function createPdfViewer(container) {
     textLayerDiv.style.setProperty('--scale-factor', String(scale));
     pageDiv.appendChild(textLayerDiv);
 
+    const selectionLayer = document.createElement('div');
+    selectionLayer.className = 'pdf-selection-layer';
+    selectionLayer.setAttribute('aria-label', 'PDF 선택 레이어');
+    pageDiv.appendChild(selectionLayer);
+
     container.appendChild(pageDiv);
 
     const ctx = canvas.getContext('2d');
@@ -127,8 +149,465 @@ export function createPdfViewer(container) {
     if (token !== loadToken) return null;
     const textLayer = new pdfjsLib.TextLayer({ textContentSource: textContent, container: textLayerDiv, viewport });
     await textLayer.render();
+    buildFigureCandidates(pageDiv);
+    setSelectionLayersActive();
     return { pageIndex, textLayerDiv };
   }
+
+  function normalizedRect(a, b) {
+    const x = Math.min(a.x, b.x);
+    const y = Math.min(a.y, b.y);
+    return {
+      x,
+      y,
+      width: Math.abs(a.x - b.x),
+      height: Math.abs(a.y - b.y),
+    };
+  }
+
+  function localPoint(e, pageDiv) {
+    const r = pageDiv.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(e.clientX - r.left, r.width)),
+      y: Math.max(0, Math.min(e.clientY - r.top, r.height)),
+    };
+  }
+
+  function intersects(a, b) {
+    return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+  }
+
+  function selectedTextForRect(pageDiv, rect) {
+    const pageBox = pageDiv.getBoundingClientRect();
+    const selectedBox = {
+      left: pageBox.left + rect.x,
+      top: pageBox.top + rect.y,
+      right: pageBox.left + rect.x + rect.width,
+      bottom: pageBox.top + rect.y + rect.height,
+    };
+    const chunks = [];
+    pageDiv.querySelectorAll('.textLayer span').forEach(span => {
+      const box = span.getBoundingClientRect();
+      if (!box.width || !box.height || !intersects(selectedBox, box)) return;
+      const text = (span.textContent || '').replace(/\s+/g, ' ').trim();
+      if (text) chunks.push(text);
+    });
+    return chunks.join(' ').replace(/\s+/g, ' ').trim();
+  }
+
+  function cropImageForRect(pageDiv, rect) {
+    const source = pageDiv.querySelector('canvas');
+    if (!source || rect.width < 2 || rect.height < 2) return null;
+    const cssWidth = parseFloat(source.style.width) || source.getBoundingClientRect().width || source.width;
+    const cssHeight = parseFloat(source.style.height) || source.getBoundingClientRect().height || source.height;
+    const sx = source.width / cssWidth;
+    const sy = source.height / cssHeight;
+    const crop = document.createElement('canvas');
+    crop.width = Math.max(1, Math.round(rect.width * sx));
+    crop.height = Math.max(1, Math.round(rect.height * sy));
+    const ctx = crop.getContext('2d');
+    ctx.drawImage(
+      source,
+      Math.round(rect.x * sx),
+      Math.round(rect.y * sy),
+      crop.width,
+      crop.height,
+      0,
+      0,
+      crop.width,
+      crop.height
+    );
+    return {
+      mime: 'image/png',
+      dataUrl: crop.toDataURL('image/png'),
+      width: crop.width,
+      height: crop.height,
+    };
+  }
+
+
+  function relativeRect(box, pageBox) {
+    return {
+      x: Math.max(0, box.left - pageBox.left),
+      y: Math.max(0, box.top - pageBox.top),
+      width: Math.max(0, box.right - box.left),
+      height: Math.max(0, box.bottom - box.top),
+    };
+  }
+
+  function unionRect(a, b) {
+    if (!a) return { left: b.left, top: b.top, right: b.right, bottom: b.bottom };
+    return {
+      left: Math.min(a.left, b.left),
+      top: Math.min(a.top, b.top),
+      right: Math.max(a.right, b.right),
+      bottom: Math.max(a.bottom, b.bottom),
+    };
+  }
+
+  function textLinesForPage(pageDiv) {
+    const pageBox = pageDiv.getBoundingClientRect();
+    const spans = Array.from(pageDiv.querySelectorAll('.textLayer span'))
+      .map(span => {
+        const box = span.getBoundingClientRect();
+        const text = (span.textContent || '').replace(/\s+/g, ' ').trim();
+        if (!text || !box.width || !box.height) return null;
+        return { text, box, x: box.left - pageBox.left, yMid: box.top - pageBox.top + box.height / 2 };
+      })
+      .filter(Boolean)
+      .sort((a, b) => (a.yMid - b.yMid) || (a.x - b.x));
+
+    const lines = [];
+    for (const item of spans) {
+      const last = lines[lines.length - 1];
+      if (!last || Math.abs(last.yMid - item.yMid) > Math.max(5, item.box.height * 0.45)) {
+        lines.push({
+          items: [item],
+          yMid: item.yMid,
+          rect: { left: item.box.left, top: item.box.top, right: item.box.right, bottom: item.box.bottom },
+        });
+        continue;
+      }
+      last.items.push(item);
+      last.yMid = (last.yMid * (last.items.length - 1) + item.yMid) / last.items.length;
+      last.rect = unionRect(last.rect, item.box);
+    }
+
+    return lines.map(line => {
+      line.items.sort((a, b) => a.x - b.x);
+      return {
+        text: line.items.map(item => item.text).join(' ').replace(/\s+/g, ' ').trim(),
+        rect: relativeRect(line.rect, pageBox),
+        itemCount: line.items.length,
+      };
+    });
+  }
+
+  function unionPageRect(a, b) {
+    if (!a) return { ...b };
+    const left = Math.min(a.x, b.x);
+    const top = Math.min(a.y, b.y);
+    const right = Math.max(a.x + a.width, b.x + b.width);
+    const bottom = Math.max(a.y + a.height, b.y + b.height);
+    return { x: left, y: top, width: right - left, height: bottom - top };
+  }
+
+  function horizontalOverlapRatio(a, b) {
+    const overlap = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
+    return overlap / Math.max(1, Math.min(a.width, b.width));
+  }
+
+  function horizontalOverlapWidth(a, b) {
+    return Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
+  }
+
+  function isCaptionContinuation(prevLine, nextLine) {
+    if (!prevLine || !nextLine) return false;
+    if (/^\s*(?:fig(?:ure)?\.?|그림|table|표)\s*(?:\d+|[ivxlcdm]+)?/i.test(nextLine.text)) return false;
+    if (/^\s*\d+(?:\.\d+)*\s+[A-Z가-힣]/.test(nextLine.text)) return false;
+    const prevBottom = prevLine.rect.y + prevLine.rect.height;
+    const gap = nextLine.rect.y - prevBottom;
+    const lineHeight = Math.max(prevLine.rect.height, nextLine.rect.height, 10);
+    if (gap < -2 || gap > Math.max(16, lineHeight * 0.9)) return false;
+    return horizontalOverlapRatio(prevLine.rect, nextLine.rect) >= 0.35
+      || Math.abs(nextLine.rect.x - prevLine.rect.x) <= lineHeight * 1.8;
+  }
+
+  function captionBlocksForPage(pageDiv) {
+    const lines = textLinesForPage(pageDiv);
+    const blocks = [];
+    for (let i = 0; i < lines.length; i++) {
+      const first = lines[i];
+      if (!FIGURE_CAPTION_RE.test(first.text)) continue;
+      const blockLines = [first];
+      let rect = { ...first.rect };
+      let text = first.text;
+      let prev = first;
+      for (let j = i + 1; j < lines.length && blockLines.length < 5; j++) {
+        const next = lines[j];
+        if (!isCaptionContinuation(prev, next)) break;
+        blockLines.push(next);
+        rect = unionPageRect(rect, next.rect);
+        text = `${text} ${next.text}`.replace(/\s+/g, ' ').trim();
+        prev = next;
+        i = j;
+      }
+      blocks.push({ text, rect, lines: blockLines });
+    }
+    return blocks;
+  }
+
+  function columnBoundsForCaption(pageDiv, captionRect) {
+    const pageW = pageDiv.getBoundingClientRect().width;
+    const center = captionRect.x + captionRect.width / 2;
+    if (captionRect.width < pageW * 0.62) {
+      return center < pageW / 2
+        ? { x: pageW * 0.04, width: pageW * 0.46 }
+        : { x: pageW * 0.50, width: pageW * 0.46 };
+    }
+    return { x: pageW * 0.04, width: pageW * 0.92 };
+  }
+
+  function scanInkBounds(pageDiv, searchRect, { direction = 'bottom' } = {}) {
+    const canvas = pageDiv.querySelector('canvas');
+    if (!canvas || searchRect.width < 10 || searchRect.height < 10) return null;
+    const cssWidth = parseFloat(canvas.style.width) || canvas.getBoundingClientRect().width || canvas.width;
+    const cssHeight = parseFloat(canvas.style.height) || canvas.getBoundingClientRect().height || canvas.height;
+    const sx = canvas.width / cssWidth;
+    const sy = canvas.height / cssHeight;
+    const x = Math.max(0, Math.floor(searchRect.x * sx));
+    const y = Math.max(0, Math.floor(searchRect.y * sy));
+    const w = Math.max(1, Math.min(canvas.width - x, Math.ceil(searchRect.width * sx)));
+    const h = Math.max(1, Math.min(canvas.height - y, Math.ceil(searchRect.height * sy)));
+    let data;
+    try {
+      data = canvas.getContext('2d').getImageData(x, y, w, h).data;
+    } catch {
+      return null;
+    }
+
+    const rows = new Uint16Array(h);
+    const step = Math.max(1, Math.floor(Math.min(w, h) / 900));
+    for (let yy = 0; yy < h; yy += step) {
+      for (let xx = 0; xx < w; xx += step) {
+        const i = (yy * w + xx) * 4;
+        if (data[i + 3] < 20) continue;
+        const r = data[i], g = data[i + 1], b = data[i + 2];
+        if (r > 245 && g > 245 && b > 245) continue;
+        rows[yy] += 1;
+      }
+    }
+
+    const rowThreshold = Math.max(2, Math.floor(w / step * 0.006));
+    const maxGap = Math.max(8, Math.round(18 * sy));
+    let top = -1;
+    let bottom = -1;
+    let gap = 0;
+    if (direction === 'top') {
+      for (let yy = 0; yy < h; yy++) {
+        if (rows[yy] >= rowThreshold) { top = yy; bottom = yy; break; }
+      }
+      if (top < 0) return null;
+      for (let yy = top + 1; yy < h; yy++) {
+        if (rows[yy] >= rowThreshold) {
+          bottom = yy;
+          gap = 0;
+        } else if (++gap > maxGap) {
+          break;
+        }
+      }
+    } else {
+      for (let yy = h - 1; yy >= 0; yy--) {
+        if (rows[yy] >= rowThreshold) { bottom = yy; top = yy; break; }
+      }
+      if (bottom < 0) return null;
+      for (let yy = bottom - 1; yy >= 0; yy--) {
+        if (rows[yy] >= rowThreshold) {
+          top = yy;
+          gap = 0;
+        } else if (++gap > maxGap) {
+          break;
+        }
+      }
+    }
+    if ((bottom - top) / sy < 35) return null;
+
+    const colThreshold = 1;
+    let left = w - 1;
+    let right = 0;
+    for (let xx = 0; xx < w; xx++) {
+      let inkCount = 0;
+      for (let yy = top; yy <= bottom; yy += step) {
+        const i = (yy * w + xx) * 4;
+        if (data[i + 3] < 20) continue;
+        const r = data[i], g = data[i + 1], b = data[i + 2];
+        if (r > 245 && g > 245 && b > 245) continue;
+        inkCount += 1;
+      }
+      if (inkCount >= colThreshold) {
+        left = Math.min(left, xx);
+        right = Math.max(right, xx);
+      }
+    }
+    if (right <= left) { left = 0; right = w - 1; }
+
+    return {
+      x: searchRect.x + left / sx,
+      y: searchRect.y + top / sy,
+      width: (right - left + 1) / sx,
+      height: (bottom - top + 1) / sy,
+    };
+  }
+
+  function expandRect(rect, pageDiv, pad) {
+    const pageBox = pageDiv.getBoundingClientRect();
+    const x = Math.max(0, rect.x - pad);
+    const y = Math.max(0, rect.y - pad);
+    const right = Math.min(pageBox.width, rect.x + rect.width + pad);
+    const bottom = Math.min(pageBox.height, rect.y + rect.height + pad);
+    return { x, y, width: Math.max(1, right - x), height: Math.max(1, bottom - y) };
+  }
+
+  function figureRectFromCaption(pageDiv, caption) {
+    const pageH = pageDiv.getBoundingClientRect().height;
+    const column = columnBoundsForCaption(pageDiv, caption.rect);
+    const captionTop = caption.rect.y;
+    const captionBottom = caption.rect.y + caption.rect.height;
+    const captionNearTop = captionTop < pageH * 0.22;
+    const search = captionNearTop
+      ? {
+          x: column.x,
+          y: Math.min(pageH, captionBottom + 4),
+          width: column.width,
+          height: Math.min(pageH - captionBottom - 4, pageH * 0.38),
+        }
+      : {
+          x: column.x,
+          y: Math.max(0, captionTop - pageH * 0.46),
+          width: column.width,
+          height: Math.max(0, captionTop - Math.max(0, captionTop - pageH * 0.46) - 4),
+        };
+
+    const ink = scanInkBounds(pageDiv, search, { direction: captionNearTop ? 'top' : 'bottom' });
+    let rect;
+    if (ink) {
+      const top = Math.min(captionTop, ink.y);
+      const bottom = Math.max(captionBottom, ink.y + ink.height);
+      const left = Math.min(ink.x, caption.rect.x);
+      const right = Math.max(ink.x + ink.width, caption.rect.x + caption.rect.width);
+      rect = { x: left, y: top, width: right - left, height: bottom - top };
+    } else {
+      const fallbackHeight = Math.min(pageH * 0.34, Math.max(120, pageH * 0.22));
+      rect = captionNearTop
+        ? {
+            x: column.x,
+            y: Math.max(0, captionTop - 4),
+            width: column.width,
+            height: Math.min(pageH - captionTop + 4, fallbackHeight + caption.rect.height),
+          }
+        : {
+            x: column.x,
+            y: Math.max(0, captionTop - fallbackHeight),
+            width: column.width,
+            height: Math.min(pageH - Math.max(0, captionTop - fallbackHeight), fallbackHeight + caption.rect.height),
+          };
+    }
+    return expandRect(rect, pageDiv, 8);
+  }
+
+  function buildFigureCandidates(pageDiv) {
+    const layer = pageDiv.querySelector('.pdf-selection-layer');
+    if (!layer) return;
+    layer.querySelectorAll('.pdf-figure-candidate').forEach(el => el.remove());
+    const captions = captionBlocksForPage(pageDiv).slice(0, 12);
+
+    captions.forEach((caption, idx) => {
+      const rect = figureRectFromCaption(pageDiv, caption);
+      if (!rect || rect.width < 40 || rect.height < 40) return;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'pdf-figure-candidate';
+      btn.style.left = `${rect.x}px`;
+      btn.style.top = `${rect.y}px`;
+      btn.style.width = `${rect.width}px`;
+      btn.style.height = `${rect.height}px`;
+      btn.title = `${caption.text} 선택`;
+      btn.setAttribute('aria-label', `${caption.text} 영역 선택`);
+      btn.dataset.figureLabel = caption.text;
+      btn.dataset.figureIndex = String(idx + 1);
+      btn.addEventListener('pointerdown', ev => ev.stopPropagation());
+      btn.addEventListener('click', ev => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        selectRegionFromRect(pageDiv, rect, 'figure');
+      });
+      btn.addEventListener('keydown', ev => {
+        if (ev.key !== 'Enter' && ev.key !== ' ') return;
+        ev.preventDefault();
+        selectRegionFromRect(pageDiv, rect, 'figure');
+      });
+      layer.appendChild(btn);
+    });
+  }
+
+  function selectRegionFromRect(pageDiv, rect, source = 'manual') {
+    clearSelectionVisuals();
+    const layer = pageDiv.querySelector('.pdf-selection-layer');
+    if (layer) {
+      const box = document.createElement('div');
+      box.className = source === 'figure' ? 'pdf-selection-box pdf-selection-box--figure' : 'pdf-selection-box';
+      box.style.left = `${rect.x}px`;
+      box.style.top = `${rect.y}px`;
+      box.style.width = `${rect.width}px`;
+      box.style.height = `${rect.height}px`;
+      layer.appendChild(box);
+    }
+    const image = cropImageForRect(pageDiv, rect);
+    const payload = {
+      type: 'pdf-region',
+      source,
+      page: Number(pageDiv.dataset.page),
+      rect: { ...rect, units: 'css-px' },
+      text: selectedTextForRect(pageDiv, rect),
+      image,
+    };
+    if (selectionHandler) selectionHandler(payload);
+  }
+
+  function beginSelectionDrag(e) {
+    if (!selectionMode || e.button !== 0) return;
+    const layer = e.target.closest?.('.pdf-selection-layer');
+    if (!layer || !container.contains(layer)) return;
+    const pageDiv = layer.closest('.pdf-page');
+    if (!pageDiv) return;
+    e.preventDefault();
+    clearSelectionVisuals();
+    const start = localPoint(e, pageDiv);
+    const box = document.createElement('div');
+    box.className = 'pdf-selection-box';
+    layer.appendChild(box);
+    activeSelection = { pageDiv, layer, start, box };
+
+    const renderBox = (point) => {
+      const r = normalizedRect(start, point);
+      box.style.left = `${r.x}px`;
+      box.style.top = `${r.y}px`;
+      box.style.width = `${r.width}px`;
+      box.style.height = `${r.height}px`;
+      return r;
+    };
+    renderBox(start);
+
+    const onMove = (ev) => {
+      if (!activeSelection) return;
+      renderBox(localPoint(ev, pageDiv));
+    };
+    const onUp = (ev) => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+      if (!activeSelection) return;
+      const rect = renderBox(localPoint(ev, pageDiv));
+      activeSelection = null;
+      if (rect.width < 8 || rect.height < 8) {
+        box.remove();
+        return;
+      }
+      selectRegionFromRect(pageDiv, rect);
+    };
+    const onCancel = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+      if (activeSelection?.box) activeSelection.box.remove();
+      activeSelection = null;
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
+  }
+
+  container.addEventListener('pointerdown', beginSelectionDrag);
 
   // 모든 텍스트 레이어 span을 평탄화해 검색 인덱스 구축.
   function buildIndex() {
@@ -397,6 +876,7 @@ export function createPdfViewer(container) {
 
   async function load(source) {
     await destroy();
+    selectionMode = false;
     lastSource = source;
     const token = loadToken;
     let task;
@@ -466,5 +946,33 @@ export function createPdfViewer(container) {
 
   function isLoaded() { return !!doc; }
 
-  return { load, destroy, highlightQuote, canHighlightQuote, scrollToPage, relayout, isLoaded };
+  function setSelectionMode(enabled) {
+    selectionMode = !!enabled && !!doc;
+    setSelectionLayersActive();
+    return selectionMode;
+  }
+
+  function onRegionSelected(callback) {
+    selectionHandler = typeof callback === 'function' ? callback : null;
+  }
+
+  function clearSelection() {
+    clearSelectionVisuals();
+  }
+
+  function isSelectionMode() { return selectionMode; }
+
+  return {
+    load,
+    destroy,
+    highlightQuote,
+    canHighlightQuote,
+    scrollToPage,
+    relayout,
+    isLoaded,
+    setSelectionMode,
+    onRegionSelected,
+    clearSelection,
+    isSelectionMode,
+  };
 }
