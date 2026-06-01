@@ -440,6 +440,8 @@ function showPaperPdf(paperId, title) {
 }
 
 // 업로드 중인 로컬 파일 즉시 미리보기.
+// blob URL(문자열 소스)로 로드해야 분석 중에도 relayout()이 재렌더되어
+// 패널 폭 변경 시 PDF가 다시 맞춰진다. (ArrayBuffer는 pdf.js가 detach 해버려 재사용 불가)
 function showLocalPdf(file) {
   if (!pdfViewer) return;
   clearPdfSelection();
@@ -452,8 +454,7 @@ function showLocalPdf(file) {
   pdfState.available = true;
   pdfState.open = true;
   applyPdfLayout();
-  file.arrayBuffer()
-    .then(buf => pdfViewer.load({ data: buf }))
+  pdfViewer.load(pdfState.blobUrl)
     .then(() => rerenderEvidenceMessages())
     .catch(err => console.warn('로컬 PDF 미리보기 실패', err));
 }
