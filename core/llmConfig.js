@@ -1,7 +1,7 @@
 // core/llmConfig.js
 // In-memory per-agent LLM backend/model 설정.
-// 역할별 키: orchestrator, analyst, verifier, writer, audit, chat
-const ROLES = ['orchestrator', 'analyst', 'verifier', 'writer', 'audit', 'chat'];
+// 역할별 키: orchestrator, analyst, verifier, writer, coreInsight, audit, chat
+const ROLES = ['orchestrator', 'analyst', 'verifier', 'writer', 'coreInsight', 'audit', 'chat'];
 
 export const CODEX_MODELS = Object.freeze(['gpt-5.5', 'gpt-5.4']);
 export const CODEX_MODEL = 'gpt-5.5';

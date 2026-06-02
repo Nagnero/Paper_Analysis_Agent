@@ -82,12 +82,21 @@ export async function writeAnalysisFiles(paperId, analysisId, { reportMd, claims
 
 export async function readAnalysisFiles(paperId, analysisId) {
   const dir = analysisDir(paperId, analysisId);
-  const [report, claims, metrics] = await Promise.all([
+  const [report, claims, metrics, coreInsights] = await Promise.all([
     fs.readFile(path.join(dir, 'report.md'), 'utf8').catch(() => ''),
     fs.readFile(path.join(dir, 'claims.json'), 'utf8').then(JSON.parse).catch(() => []),
     fs.readFile(path.join(dir, 'metrics.json'), 'utf8').then(JSON.parse).catch(() => ({})),
+    fs.readFile(path.join(dir, 'core-insights.json'), 'utf8').then(JSON.parse).catch(() => null),
   ]);
-  return { report, claims, metrics };
+  return { report, claims, metrics, coreInsights };
+}
+
+export async function writeCoreInsights(paperId, analysisId, coreInsightsJson) {
+  const dir = analysisDir(paperId, analysisId);
+  await ensureDir(dir);
+  const coreInsightsPath = path.join(dir, 'core-insights.json');
+  await fs.writeFile(coreInsightsPath, JSON.stringify(coreInsightsJson, null, 2), 'utf8');
+  return coreInsightsPath;
 }
 
 export async function writePaperText(paperId, text) {

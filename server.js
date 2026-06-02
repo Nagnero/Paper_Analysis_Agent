@@ -10,6 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { runPipeline } from './pipeline.js';
+import { run as runCoreInsight } from './agents/coreInsight.js';
 import { checkAuthStatus } from './core/claudeClient.js';
 import { callLLM } from './core/llm.js';
 import { getCurrent as getPrompts, setCurrent as setPrompts, loadDefaults as loadDefaultPrompts } from './core/promptStore.js';
@@ -360,6 +361,7 @@ async function handleLibraryGetPaper(req, res, id) {
         report: files.report,
         claims: files.claims,
         metrics: files.metrics,
+        coreInsights: files.coreInsights,
         directive: files.metrics?.directive ?? null,
         auditResults: files.metrics?.auditResults ?? [],
       };
@@ -368,6 +370,37 @@ async function handleLibraryGetPaper(req, res, id) {
     jsonResponse(res, 200, { paper, analysis, chats });
   } catch (err) {
     jsonResponse(res, 500, { error: err.message });
+  }
+}
+
+async function handleLibraryPaperCoreInsights(req, res, paperId) {
+  try {
+    const paper = await library.getPaper(paperId);
+    if (!paper) return jsonResponse(res, 404, { error: 'paper not found' });
+    const latest = await library.getLatestAnalysis(paper.id);
+    if (!latest) return jsonResponse(res, 400, { error: '저장된 분석이 없습니다.' });
+
+    const auth = await authStatus.checkAll();
+    llmConfig.applyAvailability(auth);
+    const cfg = llmConfig.getRole('coreInsight');
+    const entry = auth[cfg.backend];
+    if (!entry || !entry.loggedIn) {
+      return jsonResponse(res, 401, { error: `${cfg.backend}에 로그인이 필요합니다. 설정에서 다른 백엔드로 바꾸거나 로그인하세요.` });
+    }
+
+    const prompts = await getPrompts();
+    const files = await fileManager.readAnalysisFiles(paper.id, latest.id);
+    const coreInsights = await runCoreInsight({
+      title: paper.title,
+      report: files.report,
+      verifiedClaims: files.claims,
+      prompts,
+      llm: cfg,
+    });
+    await fileManager.writeCoreInsights(paper.id, latest.id, coreInsights);
+    jsonResponse(res, 200, { coreInsights });
+  } catch (err) {
+    handleJsonError(res, err);
   }
 }
 
@@ -778,7 +811,7 @@ async function handlePromptsPut(req, res) {
   }
   const current = await getPrompts();
   const next = { ...current };
-  for (const k of ['analyst', 'verifier', 'writer', 'orchestrator']) {
+  for (const k of ['analyst', 'verifier', 'writer', 'orchestrator', 'coreInsight']) {
     if (k in payload) {
       if (typeof payload[k] !== 'string') {
         res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -982,9 +1015,9 @@ async function handleVendorStatic(req, res) {
   }
 }
 
-// /api/library/papers/:id, /:id/chat, /:id/pdf, /api/library/folders/:id 매칭
+// /api/library/papers/:id, /:id/chat, /:id/pdf, /:id/core-insights, /api/library/folders/:id 매칭
 function matchLibraryRoute(method, url) {
-  const m = url.match(/^\/api\/library\/(folders|papers)\/(\d+)(\/chat|\/pdf)?$/);
+  const m = url.match(/^\/api\/library\/(folders|papers)\/(\d+)(\/chat|\/pdf|\/core-insights)?$/);
   if (!m) return null;
   return { kind: m[1], id: Number(m[2]), sub: m[3] || '', method };
 }
@@ -1007,6 +1040,7 @@ function createAppServer() {
       if (m.kind === 'folders' && m.method === 'PATCH') return handleLibraryUpdateFolder(req, res, m.id);
       if (m.kind === 'folders' && m.method === 'DELETE') return handleLibraryDeleteFolder(req, res, m.id);
       if (m.kind === 'papers' && m.sub === '/chat' && m.method === 'POST') return handleLibraryPaperChat(req, res, m.id);
+      if (m.kind === 'papers' && m.sub === '/core-insights' && m.method === 'POST') return handleLibraryPaperCoreInsights(req, res, m.id);
       if (m.kind === 'papers' && m.sub === '/pdf' && m.method === 'GET') return handleLibraryGetPaperPdf(req, res, m.id);
       if (m.kind === 'papers' && m.method === 'GET') return handleLibraryGetPaper(req, res, m.id);
       if (m.kind === 'papers' && m.method === 'PATCH') return handleLibraryUpdatePaper(req, res, m.id);
