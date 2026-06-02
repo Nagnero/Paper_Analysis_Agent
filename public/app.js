@@ -213,6 +213,191 @@ function renderMarkdownWithEvidence(src, verifiedClaims) {
   return root;
 }
 
+// ---------------- Analysis Matrix 렌더링 ----------------
+
+function claimId(v) {
+  return v?.claim?.id ?? v?.claimId ?? v?.id ?? '';
+}
+
+function claimSource(v) {
+  const section = v?.evidenceSection ?? v?.claim?.sourceSection ?? v?.sourceSection ?? '';
+  const page = v?.claim?.sourcePage ?? v?.sourcePage ?? null;
+  if (section && page) return `${section}, p.${page}`;
+  return section || (page ? `p.${page}` : '');
+}
+
+function findVerifiedClaimById(id) {
+  return (state.currentVerifiedClaims || []).find(v => claimId(v) === id) || null;
+}
+
+function normalizeCoreInsights(coreInsights) {
+  const arr = Array.isArray(coreInsights?.coreInsights)
+    ? coreInsights.coreInsights
+    : Array.isArray(coreInsights)
+      ? coreInsights
+      : [];
+  return arr
+    .filter(item => item && typeof item === 'object')
+    .map((item, idx) => ({
+      index: idx + 1,
+      kindKo: String(item.kindKo || '기타').trim(),
+      claimKo: String(item.claimKo || '').trim(),
+      evidenceKo: String(item.evidenceKo || '').trim(),
+      caveatKo: String(item.caveatKo || '').trim(),
+      claimIds: Array.isArray(item.claimIds) ? item.claimIds.map(String) : [],
+    }))
+    .filter(row => row.claimKo && row.evidenceKo);
+}
+
+function appendCoreInsightEvidence(cell, row) {
+  const evidenceText = document.createElement('div');
+  evidenceText.textContent = row.evidenceKo || '근거 요약이 없습니다.';
+  cell.appendChild(evidenceText);
+
+  const claim = row.claimIds.map(findVerifiedClaimById).find(Boolean);
+  if (!claim?.evidenceQuote) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'matrix-evidence-row';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'evidence-ref';
+  btn.title = '논문에서 이 근거 위치로 이동';
+  btn.innerHTML = `<span class="ref-num">[${row.index}]</span><span class="ref-quote">원문 근거 보기</span><span class="ref-loupe">🔎</span>`;
+  btn.addEventListener('click', () => onEvidenceClick(claim.evidenceQuote, claim));
+  wrap.appendChild(btn);
+  const source = claimSource(claim);
+  if (source) {
+    const sourceEl = document.createElement('span');
+    sourceEl.className = 'matrix-category';
+    sourceEl.textContent = source;
+    wrap.appendChild(sourceEl);
+  }
+  cell.appendChild(wrap);
+}
+
+function createCoreInsightTable(rows) {
+  const table = document.createElement('table');
+  table.className = 'core-insight-table';
+  table.innerHTML = `
+    <thead>
+      <tr>
+        <th>구분</th>
+        <th>핵심 주장 / 철학</th>
+        <th>근거</th>
+        <th>한계 / 주의점</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  `;
+  const tbody = table.querySelector('tbody');
+  for (const row of rows) {
+    const tr = document.createElement('tr');
+    tr.className = 'core-insight-row';
+
+    const kindCell = document.createElement('td');
+    const kindBadge = document.createElement('span');
+    kindBadge.className = 'core-kind-badge';
+    kindBadge.textContent = row.kindKo || '기타';
+    kindCell.appendChild(kindBadge);
+
+    const claimCell = document.createElement('td');
+    const claimTitle = document.createElement('div');
+    claimTitle.className = 'core-claim-text';
+    claimTitle.textContent = row.claimKo || '주장 내용 없음';
+    claimCell.appendChild(claimTitle);
+
+    const evidenceCell = document.createElement('td');
+    appendCoreInsightEvidence(evidenceCell, row);
+
+    const caveatCell = document.createElement('td');
+    caveatCell.textContent = row.caveatKo || '추가 한계점이 명시되지 않았습니다.';
+
+    tr.append(kindCell, claimCell, evidenceCell, caveatCell);
+    tbody.appendChild(tr);
+  }
+  return table;
+}
+
+function renderCoreInsightEmpty() {
+  const empty = document.createElement('div');
+  empty.className = 'analysis-empty';
+  if (!state.currentAnalysisId) {
+    empty.innerHTML = `
+      <div class="analysis-empty-icon">🧩</div>
+      <h3>핵심 분석을 만들 분석 결과가 없습니다</h3>
+      <p>먼저 PDF를 업로드해 기본 논문 분석을 완료하세요.</p>
+    `;
+    analysisMatrixRoot.appendChild(empty);
+    return;
+  }
+
+  const btnDisabled = state.coreInsightsBusy ? 'disabled' : '';
+  empty.innerHTML = `
+    <div class="analysis-empty-icon">🧩</div>
+    <h3>핵심 분석 표가 아직 없습니다</h3>
+    <p>별도 핵심 분석 에이전트가 한국어로 노벨티·근거·한계를 3~5개 표 항목으로 재구성합니다.</p>
+    <button type="button" id="generateCoreInsightsBtn" class="primary" ${btnDisabled}>${state.coreInsightsBusy ? '생성 중...' : '핵심 분석 생성'}</button>
+    ${state.coreInsightsError ? `<p class="analysis-error">${escapeHtml(state.coreInsightsError)}</p>` : ''}
+  `;
+  analysisMatrixRoot.appendChild(empty);
+  $('generateCoreInsightsBtn')?.addEventListener('click', generateCoreInsights);
+}
+
+function renderAnalysisMatrix() {
+  if (!analysisMatrixRoot) return;
+  analysisMatrixRoot.innerHTML = '';
+  const rows = normalizeCoreInsights(state.currentCoreInsights);
+  const totalClaims = (state.currentVerifiedClaims || []).length;
+  if (!rows.length) {
+    renderCoreInsightEmpty();
+    return;
+  }
+
+  const head = document.createElement('div');
+  head.className = 'analysis-panel-head';
+  head.innerHTML = `
+    <div class="analysis-panel-kicker">핵심 분석</div>
+    <h2>핵심 주장 한눈 요약</h2>
+  `;
+  analysisMatrixRoot.appendChild(head);
+  analysisMatrixRoot.appendChild(createCoreInsightTable(rows));
+}
+
+async function generateCoreInsights() {
+  if (!state.currentPaperId || !state.currentAnalysisId || state.coreInsightsBusy) return;
+  state.coreInsightsBusy = true;
+  state.coreInsightsError = '';
+  renderAnalysisMatrix();
+  try {
+    const res = await fetch(`/api/library/papers/${state.currentPaperId}/core-insights`, { method: 'POST' });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(json.error || `핵심 분석 생성 실패 (${res.status})`);
+    }
+    state.currentCoreInsights = json.coreInsights || null;
+  } catch (err) {
+    state.coreInsightsError = err.message;
+    showToast(`핵심 분석 실패: ${err.message}`);
+  } finally {
+    state.coreInsightsBusy = false;
+    renderAnalysisMatrix();
+  }
+}
+
+function setWorkspaceTab(tab) {
+  const next = tab === 'analysis' ? 'analysis' : 'chat';
+  state.workspaceTab = next;
+  if (chatPane) chatPane.classList.toggle('analysis-active', next === 'analysis');
+  if (chatMain) chatMain.hidden = next !== 'chat';
+  if (analysisPane) analysisPane.hidden = next !== 'analysis';
+  for (const btn of workspaceTabs) {
+    const active = btn.getAttribute('data-workspace-tab') === next;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-selected', active ? 'true' : 'false');
+  }
+  if (next === 'analysis') renderAnalysisMatrix();
+}
+
 // ---------------- State ----------------
 
 const state = {
@@ -224,7 +409,12 @@ const state = {
   currentPaperId: null,
   currentAnalysisId: null,
   currentVerifiedClaims: [],
+  currentReport: '',
+  currentCoreInsights: null,
+  coreInsightsBusy: false,
+  coreInsightsError: '',
   pendingPdfSelection: null,
+  workspaceTab: 'chat',
   mode: 'new',
 };
 
@@ -262,6 +452,11 @@ const folderPickerEl = $('folderPicker');
 const folderPickerListEl = $('folderPickerList');
 const folderPickerNullBtn = $('folderPickerNullBtn');
 const libraryResetBtn = $('libraryResetBtn');
+const chatPane = $('chatPane');
+const chatMain = $('chatMain');
+const analysisPane = $('analysisPane');
+const analysisMatrixRoot = $('analysisMatrixRoot');
+const workspaceTabs = Array.from(document.querySelectorAll('.workspace-tab'));
 const chatMainEl = document.querySelector('.chat-main');
 const settingsModal = $('settingsModal');
 const savePromptsBtn = $('savePromptsBtn');
@@ -269,9 +464,10 @@ const promptsStatus = $('promptsStatus');
 const promptAnalyst = $('promptAnalyst');
 const promptVerifier = $('promptVerifier');
 const promptWriter = $('promptWriter');
+const promptCoreInsight = $('promptCoreInsight');
 const promptOrchestrator = $('promptOrchestrator');
-const PROMPT_FIELDS = { analyst: promptAnalyst, verifier: promptVerifier, writer: promptWriter, orchestrator: promptOrchestrator };
-const LLM_ROLES = ['orchestrator', 'analyst', 'verifier', 'writer', 'chat'];
+const PROMPT_FIELDS = { analyst: promptAnalyst, verifier: promptVerifier, writer: promptWriter, coreInsight: promptCoreInsight, orchestrator: promptOrchestrator };
+const LLM_ROLES = ['orchestrator', 'analyst', 'verifier', 'writer', 'coreInsight', 'chat'];
 const saveLlmBtn = $('saveLlmBtn');
 const resetLlmBtn = $('resetLlmBtn');
 const llmStatus = $('llmStatus');
@@ -998,6 +1194,7 @@ function rerenderEvidenceMessages() {
       renderMsg(msg);
     }
   }
+  if (state.workspaceTab === 'analysis') renderAnalysisMatrix();
 }
 
 // ---------------- 입력 / 첨부 ----------------
@@ -1138,6 +1335,9 @@ function handleSseEvent(payload, msgId) {
     msg.metrics = payload.metrics;
     msg.verifiedClaims = payload.verifiedClaims || [];
     state.currentVerifiedClaims = msg.verifiedClaims;
+    state.currentReport = msg.report;
+    state.currentCoreInsights = null;
+    state.coreInsightsError = '';
     msg.analyst = payload.analyst;
     msg.directive = payload.directive;
     msg.auditResults = payload.auditResults;
@@ -1154,6 +1354,7 @@ function handleSseEvent(payload, msgId) {
       refreshLibrary();
     }
     renderMsg(msg);
+    renderAnalysisMatrix();
     scrollToBottom();
     return;
   }
@@ -1287,8 +1488,13 @@ function clearConversation() {
   state.currentPaperId = null;
   state.currentAnalysisId = null;
   state.currentVerifiedClaims = [];
+  state.currentReport = '';
+  state.currentCoreInsights = null;
+  state.coreInsightsBusy = false;
+  state.coreInsightsError = '';
   state.mode = 'new';
   messagesEl.innerHTML = '';
+  renderAnalysisMatrix();
   clearAttachment();
   clearPdfSelection();
   clearPdf();
@@ -1503,6 +1709,10 @@ sendBtn.addEventListener('click', () => { if (!sendBtn.disabled) onSend(); });
 
 newAnalysisBtn.addEventListener('click', startNewAnalysis);
 
+for (const tab of workspaceTabs) {
+  tab.addEventListener('click', () => setWorkspaceTab(tab.getAttribute('data-workspace-tab')));
+}
+
 // 드래그 앤 드롭 (페이지 전체)
 let dragDepth = 0;
 window.addEventListener('dragenter', (e) => {
@@ -1560,6 +1770,7 @@ async function savePrompts() {
       analyst: promptAnalyst.value,
       verifier: promptVerifier.value,
       writer: promptWriter.value,
+      coreInsight: promptCoreInsight.value,
       orchestrator: promptOrchestrator.value,
     };
     const res = await fetch('/api/prompts', {
@@ -1819,6 +2030,10 @@ async function openPaper(paperId) {
     state.currentPaperId = paper.id;
     state.currentAnalysisId = analysis ? analysis.id : null;
     state.currentVerifiedClaims = analysis?.claims || [];
+    state.currentReport = analysis?.report || '';
+    state.currentCoreInsights = analysis?.coreInsights || null;
+    state.coreInsightsBusy = false;
+    state.coreInsightsError = '';
     state.sessionId = null;
     state.messages = [];
     messagesEl.innerHTML = '';
@@ -1853,6 +2068,7 @@ async function openPaper(paperId) {
         addMessage({ id: uid(), role: 'assistant', kind: 'chat', status: 'done', text: c.content });
       }
     }
+    renderAnalysisMatrix();
     showPaperPdf(paper.id, paper.source_file || paper.title || '논문');
     updateComposerMode();
     updateSendState();
@@ -2099,8 +2315,13 @@ if (libraryResetBtn) {
       state.currentPaperId = null;
       state.currentAnalysisId = null;
       state.currentVerifiedClaims = [];
+      state.currentReport = '';
+      state.currentCoreInsights = null;
+      state.coreInsightsBusy = false;
+      state.coreInsightsError = '';
       state.mode = 'new';
       messagesEl.innerHTML = '';
+      renderAnalysisMatrix();
       clearAttachment();
       clearPdf();
       composerInput.value = '';
@@ -2118,6 +2339,8 @@ if (libraryResetBtn) {
 
 // 초기 상태
 autoGrow();
+setWorkspaceTab('chat');
+renderAnalysisMatrix();
 updateComposerMode();
 updateSendState();
 fetchAuthStatus();

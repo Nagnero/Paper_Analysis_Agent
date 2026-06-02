@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROMPTS_DIR = path.join(__dirname, '..', 'prompts');
 
-const KEYS = ['analyst', 'verifier', 'writer', 'orchestrator'];
+const KEYS = ['analyst', 'verifier', 'writer', 'orchestrator', 'coreInsight'];
 
 /** 디스크에서 기본 프롬프트 읽기 */
 export async function loadDefaults() {
