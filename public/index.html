@@ -19,6 +19,12 @@
         <button type="button" id="newFolderBtn" class="sidebar-icon-btn" title="새 폴더 만들기" aria-label="새 폴더 만들기">＋</button>
       </div>
       <nav id="libraryTree" class="library-tree"></nav>
+      <div class="sidebar-section-head">
+        <span>LaTeX 프로젝트</span>
+        <button type="button" id="newLatexBtn" class="sidebar-icon-btn" title="LaTeX ZIP 업로드" aria-label="LaTeX ZIP 업로드">＋</button>
+      </div>
+      <nav id="latexTree" class="library-tree latex-tree"></nav>
+      <input type="file" id="zipInput" accept=".zip,application/zip,application/x-zip-compressed" hidden>
       <div class="sidebar-footer">
         <button type="button" id="sidebarSettingsBtn" class="sidebar-foot-btn">⚙ 설정</button>
       </div>
@@ -81,6 +87,24 @@
           </div>
         </div>
       </footer>
+        </section>
+        <section id="latexPane" class="latex-pane" hidden>
+          <div class="latex-head">
+            <span id="latexTitle" class="latex-title">LaTeX 프로젝트</span>
+            <span id="latexSaveState" class="latex-savestate"></span>
+            <span class="spacer"></span>
+            <button type="button" id="latexLogBtn" class="latex-btn" title="컴파일 로그">로그</button>
+            <button type="button" id="latexCompileBtn" class="latex-btn primary">컴파일</button>
+          </div>
+          <div id="latexEngineBanner" class="latex-engine-banner" hidden></div>
+          <div class="latex-body">
+            <div id="latexFileTree" class="latex-filetree"></div>
+            <div id="latexEditorHost" class="latex-editor"></div>
+          </div>
+          <div id="latexLog" class="latex-log" hidden>
+            <div class="latex-log-head"><span>컴파일 로그</span><button type="button" id="latexLogClose" class="latex-log-close" aria-label="로그 닫기">×</button></div>
+            <pre id="latexLogBody" class="latex-log-body"></pre>
+          </div>
         </section>
         <div id="paneResizer" class="pane-resizer" hidden></div>
         <aside id="pdfPane" class="pdf-pane" hidden>
@@ -274,6 +298,8 @@
     </div>
   </div>
 
+  <!-- Monaco AMD 로더 (LaTeX 에디터). app.js 모듈보다 먼저 실행되어 window.require 제공 -->
+  <script src="/vendor/monaco/vs/loader.js"></script>
   <script type="module" src="/app.js"></script>
 </body>
 </html>

@@ -3,6 +3,7 @@
 // 별도 파일로 import할 수 없어 이 파일에 inline으로 포함.
 import { createPdfViewer } from '/pdfViewer.js';
 import { buildCitationRefMap, createCitationMarkerRegex } from '/citationContract.js';
+import { createLatexEditor } from '/latexEditor.js';
 
 // ---------------- Markdown 렌더러 ----------------
 
@@ -416,6 +417,13 @@ const state = {
   pendingPdfSelection: null,
   workspaceTab: 'chat',
   mode: 'new',
+  // LaTeX
+  currentProjectId: null,
+  currentLatexFile: null,
+  latexFiles: [],
+  latexProjects: [],
+  latexDirty: false,
+  latexBusy: false,
 };
 
 let authStatus = null;
@@ -457,6 +465,21 @@ const chatMain = $('chatMain');
 const analysisPane = $('analysisPane');
 const analysisMatrixRoot = $('analysisMatrixRoot');
 const workspaceTabs = Array.from(document.querySelectorAll('.workspace-tab'));
+// LaTeX 모드
+const latexPane = $('latexPane');
+const latexTitle = $('latexTitle');
+const latexSaveState = $('latexSaveState');
+const latexCompileBtn = $('latexCompileBtn');
+const latexLogBtn = $('latexLogBtn');
+const latexEngineBanner = $('latexEngineBanner');
+const latexFileTree = $('latexFileTree');
+const latexEditorHost = $('latexEditorHost');
+const latexLog = $('latexLog');
+const latexLogBody = $('latexLogBody');
+const latexLogClose = $('latexLogClose');
+const latexTreeEl = $('latexTree');
+const newLatexBtn = $('newLatexBtn');
+const zipInput = $('zipInput');
 const chatMainEl = document.querySelector('.chat-main');
 const settingsModal = $('settingsModal');
 const savePromptsBtn = $('savePromptsBtn');
@@ -1492,6 +1515,7 @@ function clearConversation() {
   state.currentCoreInsights = null;
   state.coreInsightsBusy = false;
   state.coreInsightsError = '';
+  exitLatexMode();
   state.mode = 'new';
   messagesEl.innerHTML = '';
   renderAnalysisMatrix();
@@ -1504,6 +1528,274 @@ function clearConversation() {
   newAnalysisBtn.classList.remove('highlight');
   updateSendState();
   renderSidebar();
+}
+
+// ---------------- LaTeX 모드 ----------------
+
+let latexEditor = null;
+let latexEditorPromise = null;
+let latexSaveTimer = 0;
+
+function isZip(file) {
+  return /\.zip$/i.test(file.name) || file.type === 'application/zip' || file.type === 'application/x-zip-compressed';
+}
+
+function enterLatexMode() {
+  if (chatPane) chatPane.hidden = true;
+  if (latexPane) latexPane.hidden = false;
+}
+
+function exitLatexMode() {
+  if (state.mode === 'latex' && state.latexDirty) { saveCurrentLatexFile(); }
+  if (latexPane) latexPane.hidden = true;
+  if (chatPane) chatPane.hidden = false;
+  state.currentProjectId = null;
+  state.currentLatexFile = null;
+  state.latexMainFile = null;
+  state.latexFiles = [];
+  state.latexDirty = false;
+}
+
+async function ensureLatexEditor() {
+  if (latexEditor) return latexEditor;
+  if (!latexEditorPromise) {
+    latexEditorPromise = createLatexEditor(latexEditorHost).then((ed) => {
+      latexEditor = ed;
+      ed.onChange(() => { state.latexDirty = true; updateLatexSaveState(); scheduleLatexAutosave(); });
+      ed.onSave(() => { saveCurrentLatexFile(); });
+      return ed;
+    });
+  }
+  return latexEditorPromise;
+}
+
+function updateLatexSaveState(text, isErr) {
+  if (!latexSaveState) return;
+  if (text != null) {
+    latexSaveState.textContent = text;
+    latexSaveState.classList.toggle('error', !!isErr);
+  } else {
+    latexSaveState.textContent = state.latexDirty ? '● 저장 안 됨' : '';
+    latexSaveState.classList.remove('error');
+  }
+}
+
+function scheduleLatexAutosave() {
+  clearTimeout(latexSaveTimer);
+  latexSaveTimer = setTimeout(() => saveCurrentLatexFile(), 1200);
+}
+
+async function saveCurrentLatexFile() {
+  if (!state.currentProjectId || !state.currentLatexFile || !latexEditor || !state.latexDirty) return;
+  const projectId = state.currentProjectId;
+  const filePath = state.currentLatexFile;
+  const content = latexEditor.getValue();
+  try {
+    const res = await fetch(`/api/library/projects/${projectId}/file?path=${encodeURIComponent(filePath)}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }),
+    });
+    if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.error || `HTTP ${res.status}`); }
+    if (state.currentLatexFile === filePath) { state.latexDirty = false; updateLatexSaveState('저장됨'); }
+  } catch (err) {
+    updateLatexSaveState('저장 실패: ' + err.message, true);
+  }
+}
+
+async function openLatexProject(id) {
+  try {
+    const res = await fetch(`/api/library/projects/${id}`);
+    if (!res.ok) { showToast('프로젝트 로딩 실패'); return; }
+    const { project, files, mainFile, mainContent, hasPdf } = await res.json();
+    state.currentPaperId = null;
+    state.currentAnalysisId = null;
+    state.sessionId = null;
+    state.mode = 'latex';
+    state.currentProjectId = id;
+    state.latexMainFile = mainFile;
+    state.currentLatexFile = mainFile;
+    state.latexFiles = files || [];
+    state.latexDirty = false;
+    enterLatexMode();
+    if (latexTitle) { latexTitle.textContent = project.name || 'LaTeX 프로젝트'; latexTitle.title = project.name || ''; }
+    renderLatexFileTree();
+    try {
+      await ensureLatexEditor();
+      latexEditor.setContent(mainFile, mainContent || '');
+    } catch (err) {
+      showToast('에디터 로딩 실패: ' + err.message);
+    }
+    updateLatexSaveState();
+    await refreshLatexEngineBanner();
+    if (hasPdf) showProjectPdf(id); else clearPdf();
+    renderSidebar();
+    setTimeout(() => { if (latexEditor) latexEditor.layout(); }, 60);
+  } catch (err) {
+    showToast('프로젝트 로딩 실패: ' + err.message);
+  }
+}
+
+function renderLatexFileTree() {
+  if (!latexFileTree) return;
+  latexFileTree.innerHTML = '';
+  for (const f of state.latexFiles) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'latex-file'
+      + (f.path === state.currentLatexFile ? ' active' : '')
+      + (f.editable ? '' : ' readonly');
+    const label = f.path === state.latexMainFile ? `★ ${f.path}` : f.path;
+    item.textContent = label;
+    item.title = f.editable ? f.path : `${f.path} (읽기 전용)`;
+    if (f.editable) item.addEventListener('click', () => loadLatexFile(f.path));
+    else item.disabled = true;
+    latexFileTree.appendChild(item);
+  }
+}
+
+async function loadLatexFile(filePath) {
+  if (!state.currentProjectId || filePath === state.currentLatexFile) return;
+  if (state.latexDirty) await saveCurrentLatexFile();
+  try {
+    const res = await fetch(`/api/library/projects/${state.currentProjectId}/file?path=${encodeURIComponent(filePath)}`);
+    const j = await res.json();
+    if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+    state.currentLatexFile = filePath;
+    state.latexDirty = false;
+    if (latexEditor) latexEditor.setContent(filePath, j.content || '');
+    updateLatexSaveState();
+    renderLatexFileTree();
+  } catch (err) {
+    showToast('파일 열기 실패: ' + err.message);
+  }
+}
+
+async function refreshLatexEngineBanner() {
+  if (!latexEngineBanner) return;
+  try {
+    const res = await fetch('/api/latex-status');
+    const j = await res.json();
+    if (j.engine) {
+      latexEngineBanner.hidden = true;
+      if (latexCompileBtn) { latexCompileBtn.disabled = false; latexCompileBtn.title = `엔진: ${j.engine}`; }
+    } else {
+      latexEngineBanner.hidden = false;
+      latexEngineBanner.innerHTML = 'LaTeX 컴파일러가 없어 컴파일할 수 없습니다 (편집은 가능). '
+        + '<b>tectonic</b>(단일 바이너리) 또는 TeX Live/MiKTeX 설치 후 다시 여세요. '
+        + '<a href="https://tectonic-typesetting.github.io/en-US/install.html" target="_blank" rel="noopener">tectonic 설치 안내</a>';
+      if (latexCompileBtn) latexCompileBtn.disabled = true;
+    }
+  } catch { /* ignore */ }
+}
+
+async function compileLatex() {
+  if (!state.currentProjectId || state.latexBusy) return;
+  if (state.latexDirty) await saveCurrentLatexFile();
+  state.latexBusy = true;
+  if (latexCompileBtn) { latexCompileBtn.disabled = true; latexCompileBtn.textContent = '컴파일 중...'; }
+  try {
+    const res = await fetch(`/api/library/projects/${state.currentProjectId}/compile`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mainFile: state.latexMainFile }),
+    });
+    const j = await res.json().catch(() => ({}));
+    showLatexLog(j.log || j.error || '(로그 없음)');
+    if (j.hasPdf) {
+      showProjectPdf(state.currentProjectId);
+      if (!j.ok) showToast('경고와 함께 컴파일됨 — 로그 확인');
+    } else {
+      if (latexLog) latexLog.hidden = false;
+      showToast('컴파일 실패 — 로그를 확인하세요');
+    }
+  } catch (err) {
+    showToast('컴파일 요청 실패: ' + err.message);
+  } finally {
+    state.latexBusy = false;
+    if (latexCompileBtn) { latexCompileBtn.disabled = false; latexCompileBtn.textContent = '컴파일'; }
+  }
+}
+
+function showLatexLog(text) {
+  if (latexLogBody) latexLogBody.textContent = text || '';
+}
+
+// 컴파일 결과 PDF 를 우측 패널(PDF.js)에 로드. recompile 시 캐시 무력화.
+function showProjectPdf(projectId) {
+  if (!pdfViewer) return;
+  revokePdfBlob();
+  setPdfTitle('컴파일 결과');
+  const url = `/api/library/projects/${projectId}/pdf?t=${Date.now()}`;
+  if (pdfOpenExternal) pdfOpenExternal.href = url;
+  pdfState.paperId = null;
+  pdfState.available = true;
+  pdfState.open = true;
+  applyPdfLayout();
+  pdfViewer.currentPaperId = null;
+  pdfViewer.load(url).catch(err => console.warn('컴파일 PDF 로드 실패', err));
+}
+
+async function uploadLatexZip(file) {
+  if (!isZip(file)) { showToast('ZIP 파일만 업로드할 수 있어요.'); return; }
+  showToast('LaTeX 프로젝트 업로드 중...');
+  try {
+    const res = await fetch('/api/library/projects', {
+      method: 'POST', headers: { 'X-Filename': encodeURIComponent(file.name) }, body: file,
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+    await refreshLatexProjects();
+    await openLatexProject(j.project.id);
+  } catch (err) {
+    showToast('업로드 실패: ' + err.message);
+  }
+}
+
+async function refreshLatexProjects() {
+  try {
+    const res = await fetch('/api/library/projects');
+    const j = await res.json();
+    state.latexProjects = j.projects || [];
+  } catch { state.latexProjects = []; }
+  renderLatexSidebar();
+}
+
+function renderLatexSidebar() {
+  if (!latexTreeEl) return;
+  latexTreeEl.innerHTML = '';
+  if (!state.latexProjects.length) {
+    const empty = document.createElement('div');
+    empty.className = 'latex-empty';
+    empty.textContent = 'ZIP 을 끌어다 놓거나 ＋';
+    latexTreeEl.appendChild(empty);
+    return;
+  }
+  for (const p of state.latexProjects) latexTreeEl.appendChild(buildProjectItem(p));
+}
+
+function buildProjectItem(p) {
+  const item = document.createElement('div');
+  item.className = 'paper-item project-item' + (p.id === state.currentProjectId && state.mode === 'latex' ? ' active' : '');
+  item.dataset.projectId = p.id;
+  const icon = document.createElement('span'); icon.className = 'paper-icon'; icon.textContent = '📝';
+  const title = document.createElement('span'); title.className = 'paper-title'; title.textContent = p.name || 'LaTeX'; title.title = p.name || '';
+  const del = document.createElement('button'); del.type = 'button'; del.className = 'row-menu'; del.textContent = '×'; del.title = '삭제';
+  del.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (!confirm(`"${p.name}" 프로젝트를 삭제할까요? (되돌릴 수 없음)`)) return;
+    await deleteLatexProject(p.id);
+  });
+  item.append(icon, title, del);
+  item.addEventListener('click', (e) => { if (e.target.closest('.row-menu')) return; openLatexProject(p.id); });
+  return item;
+}
+
+async function deleteLatexProject(id) {
+  try {
+    await fetch(`/api/library/projects/${id}`, { method: 'DELETE' });
+    if (state.currentProjectId === id) clearConversation();
+    await refreshLatexProjects();
+  } catch (err) {
+    showToast('삭제 실패: ' + err.message);
+  }
 }
 
 function startNewAnalysis() {
@@ -1739,8 +2031,22 @@ window.addEventListener('drop', (e) => {
   dragDepth = 0;
   dropOverlay.hidden = true;
   const files = e.dataTransfer?.files;
-  if (files && files[0]) setAttachment(files[0]);
+  const f = files && files[0];
+  if (!f) return;
+  if (isZip(f)) uploadLatexZip(f);
+  else setAttachment(f);
 });
+
+// LaTeX 모드 이벤트
+if (newLatexBtn) newLatexBtn.addEventListener('click', () => zipInput && zipInput.click());
+if (zipInput) zipInput.addEventListener('change', () => {
+  const f = zipInput.files && zipInput.files[0];
+  if (f) uploadLatexZip(f);
+  zipInput.value = '';
+});
+if (latexCompileBtn) latexCompileBtn.addEventListener('click', compileLatex);
+if (latexLogBtn) latexLogBtn.addEventListener('click', () => { if (latexLog) latexLog.hidden = !latexLog.hidden; });
+if (latexLogClose) latexLogClose.addEventListener('click', () => { if (latexLog) latexLog.hidden = true; });
 
 // 설정 모달
 openSettingsBtn.addEventListener('click', openSettings);
@@ -1884,6 +2190,7 @@ function saveFolderOpenState(map) {
 }
 
 function renderSidebar() {
+  renderLatexSidebar();
   const openState = loadFolderOpenState();
   libraryTreeEl.innerHTML = '';
   const tree = state.libraryTree || { folders: [], unfoldered: [] };
@@ -2026,6 +2333,7 @@ async function openPaper(paperId) {
       return;
     }
     const { paper, analysis, chats } = await res.json();
+    if (state.mode === 'latex') exitLatexMode();
     state.mode = 'paper';
     state.currentPaperId = paper.id;
     state.currentAnalysisId = analysis ? analysis.id : null;
@@ -2345,3 +2653,4 @@ updateComposerMode();
 updateSendState();
 fetchAuthStatus();
 refreshLibrary();
+refreshLatexProjects();

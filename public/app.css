@@ -1511,3 +1511,72 @@ button { font-family: inherit; }
 .auth-blocker-foot button.btn-secondary {
   background: transparent; color: var(--text); border: 1px solid var(--border);
 }
+
+/* ---------------- LaTeX 모드 ---------------- */
+#latexPane {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+}
+#latexPane[hidden] { display: none; }
+.latex-head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(14, 15, 19, 0.92);
+}
+.latex-title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.latex-savestate { font-size: 11.5px; color: var(--muted); flex-shrink: 0; }
+.latex-savestate.error { color: var(--error); }
+.latex-head .spacer { flex: 1; }
+.latex-btn {
+  border: 1px solid var(--border); background: transparent; color: var(--text);
+  border-radius: 6px; padding: 5px 12px; font-size: 12.5px; cursor: pointer; flex-shrink: 0;
+}
+.latex-btn:hover { background: var(--surface-2); }
+.latex-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.latex-btn.primary:hover { filter: brightness(1.07); }
+.latex-btn:disabled { opacity: 0.5; cursor: default; }
+.latex-engine-banner {
+  flex-shrink: 0; padding: 8px 14px; font-size: 12px;
+  background: rgba(255, 180, 0, 0.12); border-bottom: 1px solid var(--border); color: var(--text);
+}
+.latex-engine-banner[hidden] { display: none; }
+.latex-engine-banner a { color: var(--accent); }
+.latex-body { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+.latex-filetree {
+  flex: 0 0 200px; min-width: 120px; overflow: auto;
+  border-right: 1px solid var(--border); background: #15171c; padding: 6px 0;
+}
+.latex-file {
+  display: block; width: 100%; text-align: left; border: 0; background: transparent;
+  color: var(--text); font: inherit; font-size: 12px; padding: 4px 12px; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.latex-file:hover { background: var(--surface-2); }
+.latex-file.active { background: var(--surface-2); color: var(--accent); }
+.latex-file.readonly { color: var(--muted); cursor: default; }
+.latex-editor { flex: 1; min-width: 0; }
+.latex-log {
+  flex-shrink: 0; max-height: 38%; display: flex; flex-direction: column;
+  border-top: 1px solid var(--border); background: #0b0c0f;
+}
+.latex-log[hidden] { display: none; }
+.latex-log-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 4px 12px; font-size: 11.5px; color: var(--muted); border-bottom: 1px solid var(--border);
+}
+.latex-log-close { background: transparent; border: 0; color: var(--muted); cursor: pointer; font-size: 14px; }
+.latex-log-body {
+  margin: 0; padding: 8px 12px; overflow: auto; font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11.5px; color: #c8ccd4; white-space: pre-wrap; word-break: break-word;
+}
+/* 사이드바 LaTeX 섹션 */
+.latex-tree { flex: 0 0 auto; max-height: 30vh; }
+.latex-empty { padding: 6px 14px; font-size: 11.5px; color: var(--muted); }
