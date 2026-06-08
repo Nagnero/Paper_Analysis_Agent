@@ -9,11 +9,13 @@ import { projectSrcDir, projectOutDir, projectMainPdf, ensureDir } from './fileM
 const IS_WIN = process.platform === 'win32';
 const EXE = IS_WIN ? '.exe' : '';
 
-// 선호 순서: tectonic(단일 바이너리·패키지 자동) → latexmk(풀 TeX) → pdflatex(폴백)
+// 선호 순서: latexmk → pdflatex (풀 TeX = pdfLaTeX, IEEE/ACM 등 pdfTeX 전용 패키지 호환)
+// → tectonic(XeTeX 기반, 설치 불필요하지만 spotcolor 등 pdfLaTeX 전용 패키지는 미지원) 폴백.
+// 특정 엔진 강제는 PAA_LATEX_ENGINE 환경변수(전체 경로)로.
 const ENGINES = [
-  { engine: 'tectonic', versionArgs: ['--version'] },
   { engine: 'latexmk', versionArgs: ['-version'] },
   { engine: 'pdflatex', versionArgs: ['--version'] },
+  { engine: 'tectonic', versionArgs: ['--version'] },
 ];
 
 let _cached; // {engine, cmd} | null | undefined
@@ -36,6 +38,12 @@ function fallbackDirs() {
     '/usr/local/bin',
     '/opt/homebrew/bin',
     'C:\\tectonic',
+    // 풀 TeX 배포판 기본 bin (PATH 미반영 대비)
+    'C:\\Program Files\\MiKTeX\\miktex\\bin\\x64',
+    path.join(home, 'AppData', 'Local', 'Programs', 'MiKTeX', 'miktex', 'bin', 'x64'),
+    'C:\\texlive\\2025\\bin\\windows',
+    'C:\\texlive\\2024\\bin\\windows',
+    '/Library/TeX/texbin',
   ];
 }
 
@@ -149,5 +157,11 @@ export async function compileProject(projectId, mainFile, { timeoutMs = 120_000 
 
   let hasPdf = false;
   try { await fs.stat(projectMainPdf(projectId, main)); hasPdf = true; } catch { /* no pdf */ }
+
+  // tectonic(XeTeX)에서 pdfLaTeX 전용 패키지로 실패한 경우 안내.
+  if (!hasPdf && det.engine === 'tectonic' && /spotcolor|pdftex\.def|Undefined control sequence/.test(log)) {
+    log += '\n[안내] 이 문서는 pdfLaTeX 전용 패키지(예: spotcolor — IEEE/ACM 템플릿)를 사용하는 것으로 보입니다. '
+      + 'tectonic(XeTeX)으로는 컴파일할 수 없습니다. MiKTeX 또는 TeX Live를 설치하면 앱이 pdfLaTeX(latexmk)로 컴파일합니다.\n';
+  }
   return { engine: det.engine, hasPdf, log, exitCode: lastCode };
 }
