@@ -45,6 +45,19 @@ export function createPdfViewer(container) {
   let relayoutTimer = 0;
   let selectionMode = false;
   let selectionHandler = null;
+  let reverseHandler = null;  // SyncTeX 역방향: 더블클릭 → {page, x, y}(pt, 좌상단)
+
+  // 더블클릭 → 페이지 + PDF 포인트(pt) 계산해 콜백 (텍스트 선택 모드일 땐 무시)
+  container.addEventListener('dblclick', (e) => {
+    if (!reverseHandler || selectionMode) return;
+    const pageDiv = e.target.closest && e.target.closest('.pdf-page');
+    if (!pageDiv || !container.contains(pageDiv)) return;
+    const rect = pageDiv.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / currentScale;
+    const y = (e.clientY - rect.top) / currentScale;
+    const page = Number(pageDiv.dataset.page) || 1;
+    reverseHandler({ page, x, y });
+  });
   let activeSelection = null;
 
   function documentSource(source) {
@@ -962,6 +975,10 @@ export function createPdfViewer(container) {
 
   function isSelectionMode() { return selectionMode; }
 
+  function onReverseSearch(callback) {
+    reverseHandler = typeof callback === 'function' ? callback : null;
+  }
+
   return {
     load,
     destroy,
@@ -974,5 +991,6 @@ export function createPdfViewer(container) {
     onRegionSelected,
     clearSelection,
     isSelectionMode,
+    onReverseSearch,
   };
 }

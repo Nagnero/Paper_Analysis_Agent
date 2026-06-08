@@ -74,6 +74,7 @@ html, body {
   flex-direction: column;
   overflow: hidden;
 }
+#chatPane[hidden] { display: none; }
 .workspace-tabs {
   flex-shrink: 0;
   display: flex;
@@ -83,6 +84,7 @@ html, body {
   background: var(--bg);
   border-bottom: 1px solid transparent;
 }
+.workspace-tabs[hidden] { display: none; }
 .workspace-tab {
   border: 1px solid var(--border);
   background: var(--surface);
@@ -379,7 +381,8 @@ body.resizing .pdf-pane-body { pointer-events: none; }
 }
 
 .library-tree {
-  flex: 1;
+  flex: 1 1 0;
+  min-height: 0;
   overflow-y: auto;
   padding: 4px 8px 12px;
 }
@@ -1307,7 +1310,7 @@ button { font-family: inherit; }
   padding: 10px 14px 0;
   border-bottom: 1px solid var(--border);
 }
-.tab {
+.tab, .team-tab, .section-tab {
   background: transparent;
   border: none;
   color: var(--muted);
@@ -1317,19 +1320,24 @@ button { font-family: inherit; }
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
 }
-.tab:hover { color: var(--text); }
-.tab.active {
+.tab:hover, .team-tab:hover, .section-tab:hover { color: var(--text); }
+.tab.active, .section-tab.active {
   color: var(--text);
   border-bottom-color: var(--accent);
 }
+/* 상위(팀) 탭은 더 크게 — 가장 큰 선택 */
+.settings-team-tabs { padding-top: 12px; }
+.team-tab { font-size: 15px; font-weight: 600; }
+.team-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.settings-section-tabs { padding: 6px 14px 0; }
 .modal-body {
   padding: 14px 18px;
   overflow: auto;
   flex: 1;
 }
-.tab-pane { display: none; }
-.tab-pane.active { display: block; }
-.tab-pane textarea {
+.tab-pane, .settings-pane { display: none; }
+.tab-pane.active, .settings-pane.active { display: block; }
+.tab-pane textarea, .settings-pane textarea {
   width: 100%;
   height: 400px;
   background: #11131a;
@@ -1343,8 +1351,8 @@ button { font-family: inherit; }
   resize: vertical;
   outline: none;
 }
-.tab-pane textarea:focus { border-color: var(--accent); }
-.tab-pane .btn-ghost { margin-top: 8px; }
+.tab-pane textarea:focus, .settings-pane textarea:focus { border-color: var(--accent); }
+.tab-pane .btn-ghost, .settings-pane > .btn-ghost { margin-top: 8px; }
 
 .llm-hint {
   margin: 0 0 12px;
@@ -1382,6 +1390,7 @@ button { font-family: inherit; }
   font-size: 12.5px;
   outline: none;
 }
+.llm-section-label { margin: 12px 0 4px; font-size: 11px; color: var(--muted); text-align: center; letter-spacing: 0.5px; }
 .llm-row select.llm-backend { flex: 0 0 100px; }
 .llm-row select.llm-model { flex: 1 1 0; min-width: 0; }
 .llm-row select.llm-reasoning { flex: 0 0 160px; min-width: 0; }
@@ -1511,3 +1520,139 @@ button { font-family: inherit; }
 .auth-blocker-foot button.btn-secondary {
   background: transparent; color: var(--text); border: 1px solid var(--border);
 }
+
+/* ---------------- LaTeX 모드 ---------------- */
+#latexPane {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+}
+#latexPane[hidden] { display: none; }
+.latex-head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(14, 15, 19, 0.92);
+}
+.latex-title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.latex-savestate { font-size: 11.5px; color: var(--muted); flex-shrink: 0; }
+.latex-savestate.error { color: var(--error); }
+.latex-compile-status { font-size: 11.5px; flex-shrink: 0; padding: 2px 8px; border-radius: 10px; }
+.latex-compile-status[hidden] { display: none; }
+.latex-compile-status.ok { color: #7ee08a; background: rgba(60, 200, 100, 0.12); }
+.latex-compile-status.warn { color: #e8c468; background: rgba(255, 180, 0, 0.14); cursor: pointer; }
+.latex-compile-status.fail { color: #ff8585; background: rgba(255, 80, 80, 0.14); cursor: pointer; }
+.pdf-placeholder {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 24px;
+  text-align: center;
+}
+.latex-head .spacer { flex: 1; }
+.latex-btn {
+  border: 1px solid var(--border); background: transparent; color: var(--text);
+  border-radius: 6px; padding: 5px 12px; font-size: 12.5px; cursor: pointer; flex-shrink: 0;
+}
+.latex-btn:hover { background: var(--surface-2); }
+.latex-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.latex-btn.primary:hover { filter: brightness(1.07); }
+.latex-btn:disabled { opacity: 0.5; cursor: default; }
+.latex-engine-banner {
+  flex-shrink: 0; padding: 8px 14px; font-size: 12px;
+  background: rgba(255, 180, 0, 0.12); border-bottom: 1px solid var(--border); color: var(--text);
+}
+.latex-engine-banner[hidden] { display: none; }
+.latex-engine-banner a { color: var(--accent); }
+.latex-body { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+.latex-filetree {
+  flex: 0 0 200px; min-width: 120px; overflow: auto;
+  border-right: 1px solid var(--border); background: #15171c; padding: 6px 0;
+}
+.latex-file {
+  display: block; width: 100%; text-align: left; border: 0; background: transparent;
+  color: var(--text); font: inherit; font-size: 12px; padding: 4px 12px; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.latex-file:hover { background: var(--surface-2); }
+.latex-file.active { background: var(--surface-2); color: var(--accent); }
+.latex-file.readonly { color: var(--muted); cursor: default; }
+.latex-file.image { color: var(--text); }
+/* 디렉터리 트리 */
+.latex-dir { border: 0; }
+.latex-dir > summary {
+  display: block; width: 100%; text-align: left; cursor: pointer; user-select: none;
+  color: var(--text); font-size: 12px; padding: 4px 12px; list-style: none;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.latex-dir > summary::-webkit-details-marker { display: none; }
+.latex-dir > summary::before { content: '▸ '; color: var(--muted); }
+.latex-dir[open] > summary::before { content: '▾ '; }
+.latex-dir > summary:hover { background: var(--surface-2); }
+.latex-editor { flex: 1; min-width: 0; }
+.latex-asset-view {
+  flex: 1; min-width: 0; overflow: auto; display: flex; flex-direction: column;
+  align-items: center; gap: 10px; padding: 18px; background: #0e0f13;
+}
+.latex-asset-view[hidden] { display: none; }
+.latex-asset-view img {
+  max-width: 100%; object-fit: contain; background: #fff;
+  border: 1px solid var(--border); border-radius: 4px;
+}
+.latex-asset-cap { font-size: 11.5px; color: var(--muted); font-family: ui-monospace, Menlo, Consolas, monospace; word-break: break-all; }
+.latex-jump-line { background: rgba(255, 213, 0, 0.22); }
+.latex-log {
+  flex-shrink: 0; max-height: 38%; display: flex; flex-direction: column;
+  border-top: 1px solid var(--border); background: #0b0c0f;
+}
+.latex-log[hidden] { display: none; }
+.latex-log-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 4px 12px; font-size: 11.5px; color: var(--muted); border-bottom: 1px solid var(--border);
+}
+.latex-log-close { background: transparent; border: 0; color: var(--muted); cursor: pointer; font-size: 14px; }
+.latex-log-body {
+  margin: 0; padding: 8px 12px; overflow: auto; font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11.5px; color: #c8ccd4; white-space: pre-wrap; word-break: break-word;
+}
+/* LaTeX 편집 채팅 */
+.latex-chat {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+  background: #15171c;
+}
+.latex-chat-log {
+  max-height: 140px;
+  overflow-y: auto;
+  padding: 6px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.latex-chat-log:empty { display: none; }
+.latex-chat-msg { font-size: 12px; line-height: 1.4; padding: 4px 8px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
+.latex-chat-msg.user { background: var(--surface-2); color: var(--text); align-self: flex-end; max-width: 90%; }
+.latex-chat-msg.ai { background: rgba(79, 158, 255, 0.1); color: #cfe2ff; align-self: flex-start; max-width: 95%; }
+.latex-chat-msg.ai.error { background: rgba(255, 80, 80, 0.12); color: #ff8585; }
+.latex-chat-msg.working { animation: latexChatPulse 1.2s ease-in-out infinite; }
+@keyframes latexChatPulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+.latex-chat-input { display: flex; gap: 6px; padding: 8px 10px; }
+.latex-chat-input input {
+  flex: 1; min-width: 0; background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; font: inherit; font-size: 12.5px; outline: none;
+}
+.latex-chat-input input:focus { border-color: var(--accent); }
+
+/* 사이드바 LaTeX 섹션 — 라이브러리와 공간을 반반 분할 */
+.latex-tree { flex: 1 1 0; min-height: 0; }

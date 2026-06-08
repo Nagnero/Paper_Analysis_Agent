@@ -20,6 +20,11 @@ import * as library from './core/library.js';
 import * as fileManager from './core/fileManager.js';
 import { parsePdf } from './utils/parsePdf.js';
 import { buildCitationRefMap, citationRefsForText, stripInvalidCitationMarkers } from './public/citationContract.js';
+import * as latexProject from './core/latexProject.js';
+import { detectEngine, compileProject } from './core/latexCompiler.js';
+import { reverseLookup as synctexReverse } from './core/synctex.js';
+import { runPaperWriting } from './agents/paperWriting.js';
+import { findEvidence } from './agents/evidence.js';
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 const MAX_JSON_BODY_BYTES = 1 * 1024 * 1024;
@@ -46,6 +51,7 @@ const STATIC = {
   '/app.js': { file: 'public/app.js', type: 'application/javascript; charset=utf-8' },
   '/pdfViewer.js': { file: 'public/pdfViewer.js', type: 'application/javascript; charset=utf-8' },
   '/citationContract.js': { file: 'public/citationContract.js', type: 'application/javascript; charset=utf-8' },
+  '/latexEditor.js': { file: 'public/latexEditor.js', type: 'application/javascript; charset=utf-8' },
   '/setup': { file: 'public/setup.html', type: 'text/html; charset=utf-8' },
 };
 
@@ -57,6 +63,10 @@ const VENDOR_TYPES = {
   '.css': 'text/css; charset=utf-8',
   '.map': 'application/json; charset=utf-8',
   '.wasm': 'application/wasm',
+  '.ttf': 'font/ttf',
+  '.svg': 'image/svg+xml',
+  '.html': 'text/html; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
 };
 
 function sseWrite(res, payload) {
@@ -471,6 +481,23 @@ async function handleLibraryDeletePaper(req, res, id) {
   }
 }
 
+// 분석팀 채팅 오케스트레이터의 라우팅 판단: 질문이 "논문 안에 특정 내용/주장/파트가
+// 있는지(또는 어디 있는지) 찾아 근거를 달라"는 근거 탐색 요청이면 true.
+async function isEvidenceQuestion(question, cfg) {
+  const prompt = `다음은 사용자가 어떤 논문에 대해 한 질문이다. 이 질문이 "논문 안에 특정 주장·내용·파트가 존재하는지, 또는 어디에 있는지 찾아 근거(원문)를 제시해 달라"는 근거 탐색 요청인지 판단하라.
+근거 탐색 요청이면 정확히 EVIDENCE, 그 외(일반 설명·요약·의견·번역 등)면 정확히 GENERAL 한 단어만 출력하라.
+
+질문: ${question}`;
+  try {
+    const out = await callLLM(prompt, {
+      backend: cfg.backend, model: cfg.model, reasoningEffort: cfg.reasoningEffort, timeoutMs: 60_000,
+    });
+    return /EVIDENCE/i.test(out || '') && !/GENERAL/i.test(out || '');
+  } catch {
+    return false;
+  }
+}
+
 async function handleLibraryPaperChat(req, res, paperId) {
   let preparedSelection = null;
   try {
@@ -502,6 +529,20 @@ async function handleLibraryPaperChat(req, res, paperId) {
       await fileManager.writePaperText(paper.id, paperText).catch(() => {});
     }
     const files = await fileManager.readAnalysisFiles(paper.id, latest.id);
+
+    // 오케스트레이션: "논문에 ~라는 파트/주장이 있어?" 같은 근거 탐색 질문은
+    // 근거 탐색(evidence) 에이전트에게 위임한다. (사용자는 이 채팅 = 오케스트레이터하고만 대화)
+    if (!preparedSelection?.imagePath && await isEvidenceQuestion(question, chatCfg)) {
+      const evRole = llmConfig.getRole('evidence');
+      const evAuth = auth[evRole.backend];
+      if (evAuth && evAuth.loggedIn) {
+        const answer = await findEvidence({ documentText: paperText ?? '', question, role: evRole });
+        const evTag = `evidence:${evRole.backend}${evRole.model ? '/' + evRole.model : ''}`;
+        const storedQ = questionWithSelectionMetadata(question, preparedSelection);
+        const { user: uRow, assistant: aRow } = await library.appendChatTurn(latest.id, storedQ, answer, evTag);
+        return jsonResponse(res, 200, { answer, citations: [], chats: [uRow, aRow] });
+      }
+    }
 
     const selectionContext = selectedRegionContext(preparedSelection);
     const promptText = `다음 영어 논문과 한국어 분석 리포트를 참고해 사용자 질문에 답하세요.
@@ -811,7 +852,11 @@ async function handlePromptsPut(req, res) {
   }
   const current = await getPrompts();
   const next = { ...current };
-  for (const k of ['analyst', 'verifier', 'writer', 'orchestrator', 'coreInsight']) {
+  const allowedPromptKeys = [
+    'analyst', 'verifier', 'writer', 'orchestrator', 'coreInsight', 'evidence',
+    'writeOrchestrator', 'writePlan', 'writeBody', 'writeFigure', 'writeReview', 'writeCitation', 'writeCompile',
+  ];
+  for (const k of allowedPromptKeys) {
     if (k in payload) {
       if (typeof payload[k] !== 'string') {
         res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -1022,6 +1067,335 @@ function matchLibraryRoute(method, url) {
   return { kind: m[1], id: Number(m[2]), sub: m[3] || '', method };
 }
 
+// ===== LaTeX 프로젝트 라우트 =====
+const MAX_TEX_BODY_BYTES = 10 * 1024 * 1024;
+
+async function handleLatexStatus(req, res) {
+  try {
+    const e = await detectEngine();
+    jsonResponse(res, 200, { engine: e?.engine || null });
+  } catch (err) {
+    jsonResponse(res, 200, { engine: null, error: err.message });
+  }
+}
+
+async function handleProjectList(req, res) {
+  try {
+    jsonResponse(res, 200, { projects: await library.listProjects() });
+  } catch (err) {
+    jsonResponse(res, 500, { error: err.message });
+  }
+}
+
+async function handleProjectCreate(req, res) {
+  const filename = (() => {
+    const raw = req.headers['x-filename'];
+    if (!raw || typeof raw !== 'string') return 'project.zip';
+    try { return path.basename(decodeURIComponent(raw)) || 'project.zip'; } catch { return 'project.zip'; }
+  })();
+  let tempDir;
+  try { tempDir = await mkdtemp(path.join(os.tmpdir(), 'paa-zip-')); }
+  catch (err) { return jsonResponse(res, 500, { error: `임시 디렉토리 생성 실패: ${err.message}` }); }
+  const tempPath = path.join(tempDir, 'upload.zip');
+  try {
+    try { await receiveUpload(req, tempPath); }
+    catch (err) { return jsonResponse(res, 413, { error: err.message }); }
+    const buf = await readFile(tempPath);
+    const baseName = filename.replace(/\.zip$/i, '').trim() || 'LaTeX 프로젝트';
+    const project = await library.createProject({ name: baseName, mainFile: 'main.tex', sourceZip: filename });
+    try {
+      const { mainGuess } = await latexProject.extractZip(buf, project.id);
+      await library.updateProject(project.id, { mainFile: mainGuess });
+    } catch (err) {
+      await library.deleteProject(project.id).catch(() => {});
+      return jsonResponse(res, 400, { error: `ZIP 처리 실패: ${err.message}` });
+    }
+    const full = await library.getProject(project.id);
+    const files = await latexProject.listFiles(project.id);
+    jsonResponse(res, 200, { project: full, files });
+  } catch (err) {
+    jsonResponse(res, 500, { error: err.message });
+  } finally {
+    await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function handleProjectGet(req, res, id) {
+  try {
+    const project = await library.getProject(id);
+    if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+    const files = await latexProject.listFiles(id);
+    let mainContent = '';
+    try { mainContent = await latexProject.readProjectFile(id, project.main_file); } catch { /* ignore */ }
+    let hasPdf = false;
+    try { await fs.promises.stat(fileManager.projectMainPdf(id, project.main_file)); hasPdf = true; } catch { /* ignore */ }
+    jsonResponse(res, 200, { project, files, mainFile: project.main_file, mainContent, hasPdf });
+  } catch (err) {
+    jsonResponse(res, 500, { error: err.message });
+  }
+}
+
+async function handleProjectFileGet(req, res, id, relPath) {
+  try {
+    if (!relPath) return jsonResponse(res, 400, { error: 'path required' });
+    const project = await library.getProject(id);
+    if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+    const content = await latexProject.readProjectFile(id, relPath);
+    jsonResponse(res, 200, { path: relPath, content });
+  } catch (err) {
+    jsonResponse(res, 400, { error: err.message });
+  }
+}
+
+async function handleProjectFilePut(req, res, id, relPath) {
+  try {
+    if (!relPath) return jsonResponse(res, 400, { error: 'path required' });
+    const project = await library.getProject(id);
+    if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+    const body = await readJsonBody(req, { maxBytes: MAX_TEX_BODY_BYTES });
+    if (typeof body.content !== 'string') return jsonResponse(res, 400, { error: 'content(string) required' });
+    await latexProject.writeProjectFile(id, relPath, body.content);
+    await library.touchProject(id).catch(() => {});
+    jsonResponse(res, 200, { ok: true });
+  } catch (err) {
+    jsonResponse(res, 400, { error: err.message });
+  }
+}
+
+async function handleProjectCompile(req, res, id) {
+  try {
+    const project = await library.getProject(id);
+    if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+    let mainFile = project.main_file;
+    try {
+      const body = await readJsonBody(req);
+      if (typeof body.mainFile === 'string' && body.mainFile) mainFile = body.mainFile;
+    } catch { /* 본문 없음 허용 */ }
+    if (mainFile !== project.main_file) await library.updateProject(id, { mainFile }).catch(() => {});
+    try {
+      const result = await compileProject(id, mainFile);
+      await library.touchProject(id).catch(() => {});
+      jsonResponse(res, 200, {
+        ok: result.exitCode === 0 && result.hasPdf,
+        hasPdf: result.hasPdf,
+        engine: result.engine,
+        exitCode: result.exitCode,
+        log: result.log,
+      });
+    } catch (err) {
+      jsonResponse(res, 200, { ok: false, hasPdf: false, error: err.message, log: err.message });
+    }
+  } catch (err) {
+    jsonResponse(res, 500, { error: err.message });
+  }
+}
+
+async function handleProjectChatEdit(req, res, id) {
+  // 검증/인증은 SSE 시작 전에 (정상 HTTP 상태로 에러 반환)
+  const project = await library.getProject(id);
+  if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+  let body;
+  try { body = await readJsonBody(req, { maxBytes: MAX_TEX_BODY_BYTES }); }
+  catch (err) { return jsonResponse(res, 400, { error: err.message }); }
+  const file = typeof body.file === 'string' ? body.file : project.main_file;
+  const instruction = typeof body.instruction === 'string' ? body.instruction.trim() : '';
+  if (!instruction) return jsonResponse(res, 400, { error: 'instruction required' });
+  if (instruction.length > 8000) return jsonResponse(res, 413, { error: '지시가 너무 깁니다 (최대 8000자).' });
+
+  // 인증 게이트: 작성팀 오케스트레이터 역할의 백엔드 기준
+  const auth = await authStatus.checkAll();
+  llmConfig.applyAvailability(auth);
+  const llm = llmConfig.getRole('writeOrchestrator');
+  const entry = auth[llm.backend];
+  if (!entry || !entry.loggedIn) {
+    return jsonResponse(res, 401, { error: `${llm.backend}에 로그인이 필요합니다. 설정에서 다른 백엔드로 바꾸거나 로그인하세요.` });
+  }
+
+  // 단계별 진행을 SSE 로 스트리밍
+  startSse(res);
+  try {
+    const result = await runPaperWriting({
+      projectId: id, file, mainFile: project.main_file, instruction,
+      onStep: (ev) => sseWrite(res, ev),
+    });
+    await library.touchProject(id).catch(() => {});
+    sseWrite(res, {
+      stage: 'done', ok: true, file: result.file, content: result.content, note: result.note,
+      module: result.module, compiled: result.compiled, fixes: result.fixes, log: result.log,
+      readOnly: !!result.readOnly, answer: result.answer || '',
+    });
+  } catch (err) {
+    sseWrite(res, { stage: 'error', error: err.message });
+  } finally {
+    res.end();
+  }
+}
+
+async function handleProjectZip(req, res, id) {
+  try {
+    const project = await library.getProject(id);
+    if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+    const buf = await latexProject.zipProject(id);
+    const safeName = (project.name || `project-${id}`).replace(/[^\w.\-]+/g, '_');
+    res.writeHead(200, {
+      'Content-Type': 'application/zip',
+      'Content-Length': buf.length,
+      'Content-Disposition': `attachment; filename="${safeName}.zip"`,
+    });
+    res.end(buf);
+  } catch (err) {
+    jsonResponse(res, 500, { error: err.message });
+  }
+}
+
+async function handleProjectSynctex(req, res, id, params) {
+  try {
+    const project = await library.getProject(id);
+    if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+    const page = Number(params.get('page'));
+    const x = Number(params.get('x'));
+    const y = Number(params.get('y'));
+    if (!Number.isFinite(page) || !Number.isFinite(x) || !Number.isFinite(y)) {
+      return jsonResponse(res, 400, { error: 'page/x/y required' });
+    }
+    const hit = await synctexReverse(id, project.main_file, page, x, y);
+    if (!hit) return jsonResponse(res, 200, { found: false, error: 'SyncTeX 위치를 찾지 못했습니다 (synctex 도구/데이터 필요)' });
+    jsonResponse(res, 200, { found: true, file: hit.file, line: hit.line });
+  } catch (err) {
+    jsonResponse(res, 500, { error: err.message });
+  }
+}
+
+async function handleProjectPdf(req, res, id) {
+  try {
+    const project = await library.getProject(id);
+    if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+    const pdfPath = fileManager.projectMainPdf(id, project.main_file);
+    let stat;
+    try { stat = await fs.promises.stat(pdfPath); }
+    catch { return jsonResponse(res, 404, { error: 'pdf not found (먼저 컴파일하세요)' }); }
+    res.writeHead(200, {
+      'Content-Type': 'application/pdf',
+      'Content-Length': stat.size,
+      'Content-Disposition': `inline; filename="project-${id}.pdf"`,
+      'Cache-Control': 'no-cache',
+    });
+    const stream = fs.createReadStream(pdfPath);
+    stream.on('error', () => { if (!res.writableEnded) res.end(); });
+    stream.pipe(res);
+  } catch (err) {
+    jsonResponse(res, 500, { error: err.message });
+  }
+}
+
+const ASSET_CONTENT_TYPE = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
+  '.webp': 'image/webp', '.bmp': 'image/bmp', '.svg': 'image/svg+xml',
+};
+
+// 이미지 등 바이너리 자산 원본 서빙 (미리보기용)
+async function handleProjectAssetGet(req, res, id, relPath) {
+  try {
+    if (!relPath) return jsonResponse(res, 400, { error: 'path required' });
+    const project = await library.getProject(id);
+    if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+    const buf = await latexProject.readProjectFileBuffer(id, relPath);
+    const ct = ASSET_CONTENT_TYPE[path.extname(relPath).toLowerCase()] || 'application/octet-stream';
+    res.writeHead(200, { 'Content-Type': ct, 'Content-Length': buf.length, 'Cache-Control': 'no-cache' });
+    res.end(buf);
+  } catch (err) {
+    jsonResponse(res, 400, { error: err.message });
+  }
+}
+
+// 이미지 파일 업로드(드래그/선택) → 프로젝트 src 에 저장
+async function handleProjectAssetUpload(req, res, id, params) {
+  const project = await library.getProject(id);
+  if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+  let fname = 'image.png';
+  const rawName = req.headers['x-filename'];
+  if (typeof rawName === 'string') {
+    try { fname = path.basename(decodeURIComponent(rawName)) || fname; } catch { /* keep default */ }
+  }
+  let dir = (params && params.get('dir')) || '';
+  dir = String(dir).replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  if (!dir || dir.split('/').includes('..')) dir = '';
+  const rel = dir ? `${dir}/${fname}` : fname;
+
+  let tempDir;
+  try { tempDir = await mkdtemp(path.join(os.tmpdir(), 'paa-asset-')); }
+  catch (err) { return jsonResponse(res, 500, { error: `임시 디렉토리 생성 실패: ${err.message}` }); }
+  const tempPath = path.join(tempDir, 'asset');
+  try {
+    try { await receiveUpload(req, tempPath); }
+    catch (err) { return jsonResponse(res, 413, { error: err.message }); }
+    const buf = await readFile(tempPath);
+    const saved = await latexProject.writeProjectAsset(id, rel, buf);
+    await library.touchProject(id).catch(() => {});
+    const files = await latexProject.listFiles(id);
+    jsonResponse(res, 200, { ok: true, path: saved, files });
+  } catch (err) {
+    jsonResponse(res, 400, { error: err.message });
+  } finally {
+    await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function handleProjectUpdate(req, res, id) {
+  try {
+    const project = await library.getProject(id);
+    if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+    const body = await readJsonBody(req);
+    const fields = {};
+    if (typeof body.name === 'string') fields.name = body.name.trim();
+    if (typeof body.mainFile === 'string') fields.mainFile = body.mainFile;
+    if ('folderId' in body) fields.folderId = body.folderId;
+    const row = await library.updateProject(id, fields);
+    jsonResponse(res, 200, row);
+  } catch (err) {
+    jsonResponse(res, 500, { error: err.message });
+  }
+}
+
+async function handleProjectDelete(req, res, id) {
+  try {
+    const ok = await library.deleteProject(id);
+    if (!ok) return jsonResponse(res, 404, { error: 'project not found' });
+    jsonResponse(res, 200, { ok: true });
+  } catch (err) {
+    jsonResponse(res, 500, { error: err.message });
+  }
+}
+
+// /api/library/projects[...] 디스패치 (쿼리스트링 지원 위해 별도 파서)
+function handleProjectsDispatch(req, res) {
+  let u;
+  try { u = new URL(req.url, 'http://127.0.0.1'); } catch { res.writeHead(400); res.end(); return; }
+  const rest = u.pathname.slice('/api/library/projects'.length); // '' | '/123' | '/123/file' ...
+  if (rest === '' || rest === '/') {
+    if (req.method === 'GET') return handleProjectList(req, res);
+    if (req.method === 'POST') return handleProjectCreate(req, res);
+    res.writeHead(405); res.end(); return;
+  }
+  const m = rest.match(/^\/(\d+)(\/[a-z-]+)?$/);
+  if (!m) { res.writeHead(404); res.end(); return; }
+  const id = Number(m[1]);
+  const sub = m[2] || '';
+  if (sub === '' && req.method === 'GET') return handleProjectGet(req, res, id);
+  if (sub === '' && req.method === 'PATCH') return handleProjectUpdate(req, res, id);
+  if (sub === '' && req.method === 'DELETE') return handleProjectDelete(req, res, id);
+  if (sub === '/pdf' && req.method === 'GET') return handleProjectPdf(req, res, id);
+  if (sub === '/zip' && req.method === 'GET') return handleProjectZip(req, res, id);
+  if (sub === '/synctex' && req.method === 'GET') return handleProjectSynctex(req, res, id, u.searchParams);
+  if (sub === '/compile' && req.method === 'POST') return handleProjectCompile(req, res, id);
+  if (sub === '/chat-edit' && req.method === 'POST') return handleProjectChatEdit(req, res, id);
+  if (sub === '/file' && req.method === 'GET') return handleProjectFileGet(req, res, id, u.searchParams.get('path'));
+  if (sub === '/file' && req.method === 'PUT') return handleProjectFilePut(req, res, id, u.searchParams.get('path'));
+  if (sub === '/asset' && req.method === 'GET') return handleProjectAssetGet(req, res, id, u.searchParams.get('path'));
+  if (sub === '/upload' && req.method === 'POST') return handleProjectAssetUpload(req, res, id, u.searchParams);
+  res.writeHead(405); res.end();
+}
+
 function createAppServer() {
   return http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/analyze') {
@@ -1034,6 +1408,10 @@ function createAppServer() {
       handleLibraryReset(req, res);
     } else if (req.method === 'POST' && req.url === '/api/library/folders') {
       handleLibraryCreateFolder(req, res);
+    } else if (req.method === 'GET' && req.url === '/api/latex-status') {
+      handleLatexStatus(req, res);
+    } else if (req.url && (req.url === '/api/library/projects' || req.url.startsWith('/api/library/projects/') || req.url.startsWith('/api/library/projects?'))) {
+      handleProjectsDispatch(req, res);
     } else if (req.url && req.url.startsWith('/api/library/')) {
       const m = matchLibraryRoute(req.method, req.url);
       if (!m) { res.writeHead(404); res.end(); return; }

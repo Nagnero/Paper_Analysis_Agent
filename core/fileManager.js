@@ -116,3 +116,39 @@ export async function deletePaperDir(paperId) {
 export async function deleteAllPapers() {
   await fs.rm(path.join(userDataDir(), 'papers'), { recursive: true, force: true }).catch(() => {});
 }
+
+// ---------------- LaTeX 프로젝트 ----------------
+// projects/{id}/src  : 편집 가능한 소스 트리 (zip 해제 결과)
+// projects/{id}/out  : 컴파일 산출물 (main.pdf, *.log)
+
+export function projectDir(projectId) {
+  return path.join(userDataDir(), 'projects', String(projectId));
+}
+
+export function projectSrcDir(projectId) {
+  return path.join(projectDir(projectId), 'src');
+}
+
+export function projectOutDir(projectId) {
+  return path.join(projectDir(projectId), 'out');
+}
+
+// 컴파일은 src 안에서 in-place 로 수행한다(MiKTeX bibtex 의 `..`/절대경로 쓰기 제한 회피).
+// mainFile(예: 'main.tex' 또는 'paper/main.tex')에 대응하는 산출 PDF/SyncTeX 경로.
+export function projectMainPdf(projectId, mainFile) {
+  const rel = String(mainFile || 'main.tex').replace(/\.tex$/i, '');
+  return path.join(projectSrcDir(projectId), `${rel}.pdf`);
+}
+
+export function projectSyncTex(projectId, mainFile) {
+  const rel = String(mainFile || 'main.tex').replace(/\.tex$/i, '');
+  return path.join(projectSrcDir(projectId), `${rel}.synctex.gz`);
+}
+
+export async function deleteProjectDir(projectId) {
+  await fs.rm(projectDir(projectId), { recursive: true, force: true }).catch(() => {});
+}
+
+export async function deleteAllProjects() {
+  await fs.rm(path.join(userDataDir(), 'projects'), { recursive: true, force: true }).catch(() => {});
+}

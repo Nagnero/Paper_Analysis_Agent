@@ -1,7 +1,13 @@
 // core/llmConfig.js
 // In-memory per-agent LLM backend/model 설정.
 // 역할별 키: orchestrator, analyst, verifier, writer, coreInsight, audit, chat
-const ROLES = ['orchestrator', 'analyst', 'verifier', 'writer', 'coreInsight', 'audit', 'chat'];
+const ROLES = [
+  'orchestrator', 'analyst', 'verifier', 'writer', 'coreInsight', 'audit', 'chat',
+  // 분석팀 공용 — 근거 탐색(작성팀에서도 사용)
+  'evidence',
+  // 논문 작성팀 (본문/그림은 계획→작성→검토 멀티에이전트)
+  'writeOrchestrator', 'writePlan', 'writeBody', 'writeFigure', 'writeReview', 'writeCitation', 'writeCompile',
+];
 
 export const CODEX_MODELS = Object.freeze(['gpt-5.5', 'gpt-5.4']);
 export const CODEX_MODEL = 'gpt-5.5';

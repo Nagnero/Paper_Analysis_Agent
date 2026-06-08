@@ -2,7 +2,7 @@
 // 영구 라이브러리: SQLite(better-sqlite3) 기본, 실패 시 JSON 폴백.
 // 두 백엔드 모두 같은 비동기 인터페이스 export.
 import fs from 'node:fs/promises';
-import { libraryDbPath, libraryJsonPath, userDataDir, ensureDir, deletePaperDir } from './fileManager.js';
+import { libraryDbPath, libraryJsonPath, userDataDir, ensureDir, deletePaperDir, deleteProjectDir, deleteAllProjects } from './fileManager.js';
 
 let backend = null;  // 'sqlite' | 'json'
 let db = null;       // sqlite instance OR { data, save() }
@@ -50,9 +50,19 @@ async function initSqlite() {
       model_used TEXT,
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS projects (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      folder_id INTEGER REFERENCES folders(id) ON DELETE SET NULL,
+      name TEXT NOT NULL,
+      main_file TEXT NOT NULL,
+      source_zip TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
     CREATE INDEX IF NOT EXISTS idx_papers_folder ON papers(folder_id);
     CREATE INDEX IF NOT EXISTS idx_analyses_paper ON analyses(paper_id);
     CREATE INDEX IF NOT EXISTS idx_chats_analysis ON chats(analysis_id);
+    CREATE INDEX IF NOT EXISTS idx_projects_folder ON projects(folder_id);
   `);
   backend = 'sqlite';
 }
@@ -64,11 +74,11 @@ async function initJson() {
   try {
     data = JSON.parse(await fs.readFile(file, 'utf8'));
   } catch {
-    data = { folders: [], papers: [], analyses: [], chats: [], counter: { folders: 0, papers: 0, analyses: 0, chats: 0 } };
+    data = { folders: [], papers: [], analyses: [], chats: [], projects: [], counter: { folders: 0, papers: 0, analyses: 0, chats: 0, projects: 0 } };
     await fs.writeFile(file, JSON.stringify(data, null, 2), 'utf8');
   }
-  data.counter = data.counter || { folders: 0, papers: 0, analyses: 0, chats: 0 };
-  for (const k of ['folders','papers','analyses','chats']) {
+  data.counter = data.counter || { folders: 0, papers: 0, analyses: 0, chats: 0, projects: 0 };
+  for (const k of ['folders','papers','analyses','chats','projects']) {
     data[k] = data[k] || [];
     const maxId = data[k].reduce((m, x) => Math.max(m, x.id || 0), 0);
     data.counter[k] = Math.max(data.counter[k] || 0, maxId);
@@ -339,6 +349,97 @@ export async function getTree() {
   return { folders: tree, unfoldered };
 }
 
+// ===== LaTeX 프로젝트 =====
+
+export async function createProject({ name, mainFile, sourceZip = null, folderId = null }) {
+  await init();
+  const now = new Date().toISOString();
+  if (backend === 'sqlite') {
+    const info = db.prepare(
+      'INSERT INTO projects (folder_id, name, main_file, source_zip, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(folderId ?? null, name, mainFile, sourceZip, now, now);
+    return db.prepare('SELECT * FROM projects WHERE id = ?').get(info.lastInsertRowid);
+  } else {
+    const id = ++db.data.counter.projects;
+    const row = { id, folder_id: folderId ?? null, name, main_file: mainFile, source_zip: sourceZip, created_at: now, updated_at: now };
+    db.data.projects.push(row);
+    await db.save();
+    return row;
+  }
+}
+
+export async function getProject(id) {
+  await init();
+  if (backend === 'sqlite') {
+    return db.prepare('SELECT * FROM projects WHERE id = ?').get(Number(id)) || null;
+  } else {
+    return db.data.projects.find(p => p.id === Number(id)) || null;
+  }
+}
+
+export async function listProjects() {
+  await init();
+  if (backend === 'sqlite') {
+    return db.prepare('SELECT * FROM projects ORDER BY updated_at DESC, id DESC').all();
+  } else {
+    return [...db.data.projects].sort((a, b) =>
+      (b.updated_at || '').localeCompare(a.updated_at || '') || b.id - a.id);
+  }
+}
+
+export async function updateProject(id, fields) {
+  await init();
+  const sets = [];
+  const vals = [];
+  if (typeof fields.name === 'string') { sets.push('name = ?'); vals.push(fields.name); }
+  if (typeof fields.mainFile === 'string') { sets.push('main_file = ?'); vals.push(fields.mainFile); }
+  if ('folderId' in fields) { sets.push('folder_id = ?'); vals.push(fields.folderId ?? null); }
+  if (sets.length === 0) return await getProject(id);
+  const now = new Date().toISOString();
+  sets.push('updated_at = ?'); vals.push(now);
+  if (backend === 'sqlite') {
+    vals.push(Number(id));
+    const info = db.prepare(`UPDATE projects SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+    if (info.changes === 0) return null;
+    return db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
+  } else {
+    const row = db.data.projects.find(p => p.id === Number(id));
+    if (!row) return null;
+    if (typeof fields.name === 'string') row.name = fields.name;
+    if (typeof fields.mainFile === 'string') row.main_file = fields.mainFile;
+    if ('folderId' in fields) row.folder_id = fields.folderId ?? null;
+    row.updated_at = now;
+    await db.save();
+    return row;
+  }
+}
+
+// 컴파일/저장 시 updated_at 만 갱신
+export async function touchProject(id) {
+  await init();
+  const now = new Date().toISOString();
+  if (backend === 'sqlite') {
+    db.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(now, Number(id));
+  } else {
+    const row = db.data.projects.find(p => p.id === Number(id));
+    if (row) { row.updated_at = now; await db.save(); }
+  }
+}
+
+export async function deleteProject(id) {
+  await init();
+  const pid = Number(id);
+  let ok = false;
+  if (backend === 'sqlite') {
+    ok = db.prepare('DELETE FROM projects WHERE id = ?').run(pid).changes > 0;
+  } else {
+    const idx = db.data.projects.findIndex(p => p.id === pid);
+    if (idx !== -1) { db.data.projects.splice(idx, 1); await db.save(); ok = true; }
+  }
+  await deleteProjectDir(pid);
+  return ok;
+}
+
 // ===== 분석 =====
 
 export async function createAnalysis({ paperId, durationMs = 0, configSnapshot = '', reportPath, metricsPath, claimsPath }) {
@@ -482,15 +583,17 @@ export async function appendChatTurn(analysisId, userContent, assistantContent, 
 export async function deleteAll() {
   await init();
   if (backend === 'sqlite') {
-    db.exec('DELETE FROM chats; DELETE FROM analyses; DELETE FROM papers; DELETE FROM folders;');
+    db.exec('DELETE FROM chats; DELETE FROM analyses; DELETE FROM papers; DELETE FROM projects; DELETE FROM folders;');
   } else {
     db.data.folders = [];
     db.data.papers = [];
     db.data.analyses = [];
     db.data.chats = [];
-    db.data.counter = { folders: 0, papers: 0, analyses: 0, chats: 0 };
+    db.data.projects = [];
+    db.data.counter = { folders: 0, papers: 0, analyses: 0, chats: 0, projects: 0 };
     await db.save();
   }
+  await deleteAllProjects();
 }
 
 export async function listChats(analysisId) {

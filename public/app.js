@@ -3,6 +3,7 @@
 // 별도 파일로 import할 수 없어 이 파일에 inline으로 포함.
 import { createPdfViewer } from '/pdfViewer.js';
 import { buildCitationRefMap, createCitationMarkerRegex } from '/citationContract.js';
+import { createLatexEditor } from '/latexEditor.js';
 
 // ---------------- Markdown 렌더러 ----------------
 
@@ -416,6 +417,16 @@ const state = {
   pendingPdfSelection: null,
   workspaceTab: 'chat',
   mode: 'new',
+  // LaTeX
+  currentProjectId: null,
+  currentLatexFile: null,
+  latexPreview: null,
+  latexFiles: [],
+  latexProjects: [],
+  latexDirty: false,
+  latexBusy: false,
+  latexEngine: null,
+  latexChatBusy: false,
 };
 
 let authStatus = null;
@@ -443,6 +454,7 @@ const attachSize = $('attachSize');
 const attachClear = $('attachClear');
 const composerHint = $('composerHint');
 const dropOverlay = $('dropOverlay');
+const dropOverlayCard = dropOverlay ? dropOverlay.querySelector('.drop-overlay-card') : null;
 const openSettingsBtn = $('sidebarSettingsBtn');
 const newAnalysisBtn = $('newAnalysisBtn');
 const newFolderBtn = $('newFolderBtn');
@@ -457,6 +469,30 @@ const chatMain = $('chatMain');
 const analysisPane = $('analysisPane');
 const analysisMatrixRoot = $('analysisMatrixRoot');
 const workspaceTabs = Array.from(document.querySelectorAll('.workspace-tab'));
+const workspaceTabsBar = $('workspaceTabsBar');
+// LaTeX 모드
+const latexPane = $('latexPane');
+const latexTitle = $('latexTitle');
+const latexSaveState = $('latexSaveState');
+const latexCompileStatus = $('latexCompileStatus');
+const latexCompileBtn = $('latexCompileBtn');
+const latexZipBtn = $('latexZipBtn');
+const latexLogBtn = $('latexLogBtn');
+const latexEngineBanner = $('latexEngineBanner');
+const latexFileTree = $('latexFileTree');
+const latexEditorHost = $('latexEditorHost');
+const latexAssetView = $('latexAssetView');
+const latexUploadBtn = $('latexUploadBtn');
+const latexAssetInput = $('latexAssetInput');
+const latexLog = $('latexLog');
+const latexLogBody = $('latexLogBody');
+const latexLogClose = $('latexLogClose');
+const latexTreeEl = $('latexTree');
+const newLatexBtn = $('newLatexBtn');
+const zipInput = $('zipInput');
+const latexChatLog = $('latexChatLog');
+const latexChatInput = $('latexChatInput');
+const latexChatSend = $('latexChatSend');
 const chatMainEl = document.querySelector('.chat-main');
 const settingsModal = $('settingsModal');
 const savePromptsBtn = $('savePromptsBtn');
@@ -466,8 +502,19 @@ const promptVerifier = $('promptVerifier');
 const promptWriter = $('promptWriter');
 const promptCoreInsight = $('promptCoreInsight');
 const promptOrchestrator = $('promptOrchestrator');
-const PROMPT_FIELDS = { analyst: promptAnalyst, verifier: promptVerifier, writer: promptWriter, coreInsight: promptCoreInsight, orchestrator: promptOrchestrator };
-const LLM_ROLES = ['orchestrator', 'analyst', 'verifier', 'writer', 'coreInsight', 'chat'];
+const PROMPT_FIELDS = {
+  analyst: promptAnalyst, verifier: promptVerifier, writer: promptWriter, coreInsight: promptCoreInsight, orchestrator: promptOrchestrator,
+  // 분석팀 공용 — 근거 탐색(작성팀에서도 사용)
+  evidence: $('promptEvidence'),
+  // 논문 작성팀 (본문/그림은 계획→작성→검토 멀티에이전트)
+  writeOrchestrator: $('promptWriteOrchestrator'), writePlan: $('promptWritePlan'),
+  writeBody: $('promptWriteBody'), writeFigure: $('promptWriteFigure'), writeReview: $('promptWriteReview'),
+  writeCitation: $('promptWriteCitation'), writeCompile: $('promptWriteCompile'),
+};
+const LLM_ROLES = [
+  'orchestrator', 'analyst', 'verifier', 'writer', 'coreInsight', 'chat', 'evidence',
+  'writeOrchestrator', 'writePlan', 'writeBody', 'writeFigure', 'writeReview', 'writeCitation', 'writeCompile',
+];
 const saveLlmBtn = $('saveLlmBtn');
 const resetLlmBtn = $('resetLlmBtn');
 const llmStatus = $('llmStatus');
@@ -680,6 +727,25 @@ if (pdfViewer) {
     setPdfSelection(selection);
     composerInput?.focus();
   });
+  // SyncTeX: LaTeX 모드에서 PDF 더블클릭 → 해당 .tex 줄로 이동
+  if (pdfViewer.onReverseSearch) pdfViewer.onReverseSearch((pt) => reverseToSource(pt));
+}
+
+async function reverseToSource({ page, x, y }) {
+  if (state.mode !== 'latex' || !state.currentProjectId) return;
+  try {
+    const q = `page=${page}&x=${x.toFixed(2)}&y=${y.toFixed(2)}`;
+    const res = await fetch(`/api/library/projects/${state.currentProjectId}/synctex?${q}`);
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || !j.found || !j.file) {
+      showToast(j.error || '소스 위치를 찾지 못했습니다 (synctex 데이터/도구 필요)');
+      return;
+    }
+    if (j.file !== state.currentLatexFile) await loadLatexFile(j.file);
+    if (latexEditor && latexEditor.gotoLine) latexEditor.gotoLine(j.line);
+  } catch (err) {
+    showToast('SyncTeX 오류: ' + err.message);
+  }
 }
 
 // claim 근거 클릭 → PDF에서 해당 인용문으로 점프 + 하이라이트
@@ -1492,6 +1558,7 @@ function clearConversation() {
   state.currentCoreInsights = null;
   state.coreInsightsBusy = false;
   state.coreInsightsError = '';
+  exitLatexMode();
   state.mode = 'new';
   messagesEl.innerHTML = '';
   renderAnalysisMatrix();
@@ -1502,8 +1569,494 @@ function clearConversation() {
   autoGrow();
   setComposerHint('');
   newAnalysisBtn.classList.remove('highlight');
+  setWorkspaceTab('chat');
   updateSendState();
   renderSidebar();
+}
+
+// ---------------- LaTeX 모드 ----------------
+
+let latexEditor = null;
+let latexEditorPromise = null;
+let latexSaveTimer = 0;
+
+function isZip(file) {
+  return /\.zip$/i.test(file.name) || file.type === 'application/zip' || file.type === 'application/x-zip-compressed';
+}
+
+function enterLatexMode() {
+  if (chatPane) chatPane.hidden = true;
+  if (latexPane) latexPane.hidden = false;
+  // 우측 PDF 패널을 컴파일 결과 전용으로: 분석용 컨트롤 숨기고 절반 폭으로
+  if (pdfSelectBtn) pdfSelectBtn.hidden = true;
+  if (pdfCloseBtn) pdfCloseBtn.hidden = true;
+  if (pdfPane && workspaceEl) pdfPane.style.width = Math.round(workspaceEl.clientWidth * 0.5) + 'px';
+}
+
+function exitLatexMode() {
+  if (state.mode === 'latex' && state.latexDirty) { saveCurrentLatexFile(); }
+  if (latexPane) latexPane.hidden = true;
+  if (chatPane) chatPane.hidden = false;
+  if (pdfSelectBtn) pdfSelectBtn.hidden = false;
+  if (pdfCloseBtn) pdfCloseBtn.hidden = false;
+  state.currentProjectId = null;
+  state.currentLatexFile = null;
+  state.latexPreview = null;
+  state.latexMainFile = null;
+  state.latexFiles = [];
+  state.latexDirty = false;
+}
+
+async function ensureLatexEditor() {
+  if (latexEditor) return latexEditor;
+  if (!latexEditorPromise) {
+    latexEditorPromise = createLatexEditor(latexEditorHost).then((ed) => {
+      latexEditor = ed;
+      ed.onChange(() => { state.latexDirty = true; updateLatexSaveState(); scheduleLatexAutosave(); });
+      ed.onSave(() => { saveCurrentLatexFile(); });
+      return ed;
+    });
+  }
+  return latexEditorPromise;
+}
+
+function updateLatexSaveState(text, isErr) {
+  if (!latexSaveState) return;
+  if (text != null) {
+    latexSaveState.textContent = text;
+    latexSaveState.classList.toggle('error', !!isErr);
+  } else {
+    latexSaveState.textContent = state.latexDirty ? '● 저장 안 됨' : '';
+    latexSaveState.classList.remove('error');
+  }
+}
+
+function scheduleLatexAutosave() {
+  clearTimeout(latexSaveTimer);
+  latexSaveTimer = setTimeout(() => saveCurrentLatexFile(), 1200);
+}
+
+async function saveCurrentLatexFile() {
+  if (!state.currentProjectId || !state.currentLatexFile || !latexEditor || !state.latexDirty) return;
+  const projectId = state.currentProjectId;
+  const filePath = state.currentLatexFile;
+  const content = latexEditor.getValue();
+  try {
+    const res = await fetch(`/api/library/projects/${projectId}/file?path=${encodeURIComponent(filePath)}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }),
+    });
+    if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.error || `HTTP ${res.status}`); }
+    if (state.currentLatexFile === filePath) { state.latexDirty = false; updateLatexSaveState('저장됨'); }
+  } catch (err) {
+    updateLatexSaveState('저장 실패: ' + err.message, true);
+  }
+}
+
+async function openLatexProject(id) {
+  try {
+    const res = await fetch(`/api/library/projects/${id}`);
+    if (!res.ok) { showToast('프로젝트 로딩 실패'); return; }
+    const { project, files, mainFile, mainContent, hasPdf } = await res.json();
+    state.currentPaperId = null;
+    state.currentAnalysisId = null;
+    state.sessionId = null;
+    state.mode = 'latex';
+    state.currentProjectId = id;
+    state.latexMainFile = mainFile;
+    state.currentLatexFile = mainFile;
+    state.latexPreview = null;
+    state.latexFiles = files || [];
+    state.latexDirty = false;
+    enterLatexMode();
+    showLatexEditorPane();
+    if (latexTitle) { latexTitle.textContent = project.name || 'LaTeX 프로젝트'; latexTitle.title = project.name || ''; }
+    renderLatexFileTree();
+    try {
+      await ensureLatexEditor();
+      latexEditor.setContent(mainFile, mainContent || '');
+    } catch (err) {
+      showToast('에디터 로딩 실패: ' + err.message);
+    }
+    updateLatexSaveState();
+    setLatexCompileStatus(hasPdf ? 'ok' : '');
+    await refreshLatexEngineBanner();
+    showProjectPdf(id, hasPdf); // 우측 PDF 패널 항상 표시(없으면 placeholder)
+    renderSidebar();
+    setTimeout(() => { if (latexEditor) latexEditor.layout(); }, 60);
+  } catch (err) {
+    showToast('프로젝트 로딩 실패: ' + err.message);
+  }
+}
+
+// 평탄 파일 목록 → 중첩 디렉터리 트리
+function buildLatexTree(files) {
+  const root = { dirs: new Map(), files: [] };
+  for (const f of files) {
+    const parts = f.path.split('/');
+    let node = root;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const d = parts[i];
+      if (!node.dirs.has(d)) node.dirs.set(d, { dirs: new Map(), files: [] });
+      node = node.dirs.get(d);
+    }
+    node.files.push(f);
+  }
+  return root;
+}
+
+function buildLatexFileButton(f, depth) {
+  const name = f.path.split('/').pop();
+  const kind = f.kind || (f.editable ? 'text' : 'other');
+  const isSel = f.path === state.currentLatexFile || f.path === state.latexPreview;
+  const item = document.createElement('button');
+  item.type = 'button';
+  item.className = 'latex-file'
+    + (isSel ? ' active' : '')
+    + (kind === 'text' ? '' : kind === 'image' ? ' image' : ' readonly');
+  item.style.paddingLeft = (12 + depth * 12) + 'px';
+  const icon = kind === 'image' ? '🖼' : (f.path === state.latexMainFile ? '★' : '📄');
+  item.textContent = `${icon} ${name}`;
+  item.title = kind === 'other' ? `${f.path} (열 수 없음)` : f.path;
+  if (kind === 'text') item.addEventListener('click', () => loadLatexFile(f.path));
+  else if (kind === 'image') item.addEventListener('click', () => showLatexImage(f.path));
+  else item.disabled = true;
+  return item;
+}
+
+function renderLatexTreeNode(node, prefix, depth) {
+  const frag = document.createDocumentFragment();
+  const dirNames = [...node.dirs.keys()].sort((a, b) => a.localeCompare(b));
+  for (const d of dirNames) {
+    const dirPath = prefix ? `${prefix}/${d}` : d;
+    const details = document.createElement('details');
+    details.className = 'latex-dir';
+    // 최상위는 기본 펼침, 현재 선택 파일의 조상 폴더도 펼침
+    const cur = state.currentLatexFile || state.latexPreview || '';
+    details.open = depth === 0 || cur.startsWith(dirPath + '/');
+    const summary = document.createElement('summary');
+    summary.style.paddingLeft = (8 + depth * 12) + 'px';
+    summary.textContent = d;
+    details.appendChild(summary);
+    details.appendChild(renderLatexTreeNode(node.dirs.get(d), dirPath, depth + 1));
+    frag.appendChild(details);
+  }
+  const files = node.files.slice().sort((a, b) => a.path.localeCompare(b.path));
+  for (const f of files) frag.appendChild(buildLatexFileButton(f, depth));
+  return frag;
+}
+
+function renderLatexFileTree() {
+  if (!latexFileTree) return;
+  latexFileTree.innerHTML = '';
+  const tree = buildLatexTree(state.latexFiles || []);
+  latexFileTree.appendChild(renderLatexTreeNode(tree, '', 0));
+}
+
+// 텍스트 에디터 보이기 / 이미지 미리보기 숨기기
+function showLatexEditorPane() {
+  state.latexPreview = null;
+  if (latexAssetView) latexAssetView.hidden = true;
+  if (latexEditorHost) latexEditorHost.style.display = '';
+  if (latexEditor) setTimeout(() => latexEditor.layout(), 0);
+}
+
+// 이미지 파일 미리보기 (편집 대상은 바뀌지 않음)
+function showLatexImage(filePath) {
+  if (!state.currentProjectId || !latexAssetView) return;
+  state.latexPreview = filePath;
+  if (latexEditorHost) latexEditorHost.style.display = 'none';
+  latexAssetView.hidden = false;
+  latexAssetView.innerHTML = '';
+  const img = document.createElement('img');
+  img.src = `/api/library/projects/${state.currentProjectId}/asset?path=${encodeURIComponent(filePath)}&t=${Date.now()}`;
+  img.alt = filePath;
+  img.onerror = () => { latexAssetView.innerHTML = '<div class="latex-asset-cap">이미지를 불러오지 못했습니다</div>'; };
+  const cap = document.createElement('div');
+  cap.className = 'latex-asset-cap';
+  cap.textContent = filePath;
+  latexAssetView.appendChild(img);
+  latexAssetView.appendChild(cap);
+  renderLatexFileTree();
+}
+
+async function loadLatexFile(filePath) {
+  if (!state.currentProjectId) return;
+  if (filePath === state.currentLatexFile && !state.latexPreview) return;
+  if (state.latexDirty) await saveCurrentLatexFile();
+  try {
+    const res = await fetch(`/api/library/projects/${state.currentProjectId}/file?path=${encodeURIComponent(filePath)}`);
+    const j = await res.json();
+    if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+    state.currentLatexFile = filePath;
+    state.latexDirty = false;
+    showLatexEditorPane();
+    if (latexEditor) latexEditor.setContent(filePath, j.content || '');
+    updateLatexSaveState();
+    renderLatexFileTree();
+  } catch (err) {
+    showToast('파일 열기 실패: ' + err.message);
+  }
+}
+
+function isImageFile(f) {
+  if (!f) return false;
+  if (f.type && f.type.startsWith('image/')) return true;
+  return /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(f.name || '');
+}
+
+// 이미지 파일을 현재 프로젝트에 업로드(드래그/선택) → 트리 갱신 후 미리보기
+async function uploadProjectAsset(file) {
+  if (!state.currentProjectId) { showToast('먼저 LaTeX 프로젝트를 여세요'); return; }
+  if (!isImageFile(file)) { showToast('이미지 파일만 추가할 수 있어요'); return; }
+  try {
+    const res = await fetch(`/api/library/projects/${state.currentProjectId}/upload`, {
+      method: 'POST', headers: { 'X-Filename': encodeURIComponent(file.name) }, body: file,
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+    state.latexFiles = j.files || state.latexFiles;
+    renderLatexFileTree();
+    if (j.path) showLatexImage(j.path);
+    showToast(`추가됨: ${j.path}`);
+  } catch (err) {
+    showToast('추가 실패: ' + err.message);
+  }
+}
+
+async function refreshLatexEngineBanner() {
+  if (!latexEngineBanner) return;
+  try {
+    const res = await fetch('/api/latex-status');
+    const j = await res.json();
+    state.latexEngine = j.engine || null;
+    if (j.engine) {
+      latexEngineBanner.hidden = true;
+      if (latexCompileBtn) { latexCompileBtn.disabled = false; latexCompileBtn.title = `엔진: ${j.engine}`; }
+    } else {
+      latexEngineBanner.hidden = false;
+      latexEngineBanner.innerHTML = 'LaTeX 컴파일러가 없어 컴파일할 수 없습니다 (편집은 가능). 아래에서 설치 후 앱을 재시작하세요.<br>'
+        + '<b>MiKTeX</b>(추천 · IEEE/ACM 등 pdfLaTeX 템플릿 호환): '
+        + '<a href="https://miktex.org/download" target="_blank" rel="noopener">miktex.org/download</a> · '
+        + '<b>TeX Live</b>: <a href="https://tug.org/texlive/" target="_blank" rel="noopener">tug.org/texlive</a> · '
+        + '<b>tectonic</b>(무설치 단일 바이너리, 단 XeTeX): '
+        + '<a href="https://tectonic-typesetting.github.io/en-US/install.html" target="_blank" rel="noopener">설치 안내</a>';
+      if (latexCompileBtn) latexCompileBtn.disabled = true;
+    }
+  } catch { /* ignore */ }
+}
+
+async function compileLatex() {
+  if (!state.currentProjectId || state.latexBusy) return;
+  if (state.latexDirty) await saveCurrentLatexFile();
+  state.latexBusy = true;
+  if (latexCompileBtn) { latexCompileBtn.disabled = true; latexCompileBtn.textContent = '컴파일 중...'; }
+  try {
+    const res = await fetch(`/api/library/projects/${state.currentProjectId}/compile`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mainFile: state.latexMainFile }),
+    });
+    const j = await res.json().catch(() => ({}));
+    showLatexLog(j.log || j.error || '(로그 없음)');
+    if (j.hasPdf) {
+      showProjectPdf(state.currentProjectId, true);
+      setLatexCompileStatus(j.ok ? 'ok' : 'warn');
+      if (!j.ok) showToast('경고와 함께 컴파일됨 — 로그 확인');
+    } else {
+      setLatexCompileStatus('fail');
+      if (latexLog) latexLog.hidden = false;
+      showToast('컴파일 실패 — 로그를 확인하세요');
+    }
+  } catch (err) {
+    setLatexCompileStatus('fail');
+    showToast('컴파일 요청 실패: ' + err.message);
+  } finally {
+    state.latexBusy = false;
+    if (latexCompileBtn) { latexCompileBtn.disabled = false; latexCompileBtn.textContent = '컴파일'; }
+  }
+}
+
+// 컴파일 상태 배지: ''(숨김) | 'ok' | 'warn' | 'fail'
+function setLatexCompileStatus(kind) {
+  if (!latexCompileStatus) return;
+  const map = {
+    ok:   { text: '✓ 컴파일 성공', cls: 'ok' },
+    warn: { text: '⚠ 경고와 함께 컴파일', cls: 'warn' },
+    fail: { text: '✗ 컴파일 실패 (로그 확인)', cls: 'fail' },
+  };
+  const m = map[kind];
+  latexCompileStatus.hidden = !m;
+  latexCompileStatus.className = 'latex-compile-status' + (m ? ' ' + m.cls : '');
+  latexCompileStatus.textContent = m ? m.text : '';
+}
+
+function showLatexLog(text) {
+  if (latexLogBody) latexLogBody.textContent = text || '';
+}
+
+// AI 편집 채팅: 현재 파일 + 지시 → 수정된 파일 적용 + 재컴파일
+function appendLatexChat(role, text) {
+  if (!latexChatLog) return null;
+  const el = document.createElement('div');
+  el.className = 'latex-chat-msg ' + role;
+  el.textContent = (role === 'user' ? '🧑 ' : '🤖 ') + text;
+  latexChatLog.appendChild(el);
+  latexChatLog.scrollTop = latexChatLog.scrollHeight;
+  return el;
+}
+
+async function sendLatexChat() {
+  const instruction = (latexChatInput && latexChatInput.value || '').trim();
+  if (!instruction || state.latexChatBusy) return;
+  if (!state.currentProjectId || !state.currentLatexFile) { showToast('편집할 파일을 먼저 여세요'); return; }
+  state.latexChatBusy = true;
+  if (latexChatSend) latexChatSend.disabled = true;
+  appendLatexChat('user', instruction);
+  latexChatInput.value = '';
+  const pending = appendLatexChat('ai', '🧭 시작…');
+  pending.classList.add('working');
+  try {
+    if (state.latexDirty) await saveCurrentLatexFile(); // 현재 편집분 먼저 저장
+    const res = await fetch(`/api/library/projects/${state.currentProjectId}/chat-edit`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file: state.currentLatexFile, instruction }),
+    });
+    if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.error || `HTTP ${res.status}`); }
+
+    // SSE 스트림 소비 — 단계(분류→계획→작성→검토→컴파일)를 실시간 표시
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+    let final = null;
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf('\n\n')) !== -1) {
+        const raw = buffer.slice(0, idx); buffer = buffer.slice(idx + 2);
+        const lines = raw.split('\n').filter(l => l.startsWith('data:')).map(l => l.slice(5).trimStart());
+        if (!lines.length) continue;
+        let ev; try { ev = JSON.parse(lines.join('\n')); } catch { continue; }
+        if (ev.stage === 'done') final = ev;
+        else if (ev.stage === 'error') throw new Error(ev.error || '오류');
+        else if (ev.label) { pending.textContent = ev.label; latexChatLog.scrollTop = latexChatLog.scrollHeight; }
+      }
+    }
+    if (!final) throw new Error('응답이 비었습니다');
+
+    pending.classList.remove('working');
+
+    // 근거 탐색(읽기 전용): 파일·PDF 변경 없이 답변만 표시
+    if (final.readOnly) {
+      pending.textContent = `🔎 ${final.answer || final.note || '결과 없음'}`;
+      latexChatLog.scrollTop = latexChatLog.scrollHeight;
+      return;
+    }
+
+    const moduleLabel = { writing: '✍️ 본문', figure: '📊 그림/표', citation: '📚 인용' }[final.module] || '';
+    pending.textContent = `🤖 ${moduleLabel ? '[' + moduleLabel + '] ' : ''}${final.note || '수정 완료'}`;
+    if (latexEditor && typeof final.content === 'string' && final.file === state.currentLatexFile) {
+      if (state.latexPreview) { showLatexEditorPane(); renderLatexFileTree(); }
+      latexEditor.setContent(state.currentLatexFile, final.content);
+      state.latexDirty = false;
+      updateLatexSaveState();
+    }
+    showLatexLog(final.log || '');
+    setLatexCompileStatus(final.compiled ? 'ok' : 'fail');
+    showProjectPdf(state.currentProjectId, !!final.compiled);
+    if (!final.compiled && latexLog) latexLog.hidden = false;
+  } catch (err) {
+    pending.classList.remove('working');
+    pending.textContent = '🤖 실패: ' + err.message;
+    pending.classList.add('error');
+  } finally {
+    state.latexChatBusy = false;
+    if (latexChatSend) latexChatSend.disabled = false;
+  }
+}
+
+// 컴파일 결과 PDF 를 우측 패널(PDF.js)에 로드. 컴파일 전이면 빈 상태로 패널만 연다.
+function showProjectPdf(projectId, hasPdf = true) {
+  if (!pdfViewer) return;
+  revokePdfBlob();
+  setPdfTitle('컴파일 결과');
+  pdfState.paperId = null;
+  pdfState.available = true;
+  pdfState.open = true;
+  applyPdfLayout();
+  pdfViewer.currentPaperId = null;
+  if (hasPdf) {
+    const url = `/api/library/projects/${projectId}/pdf?t=${Date.now()}`;
+    if (pdfOpenExternal) pdfOpenExternal.href = url;
+    pdfViewer.load(url).catch(err => console.warn('컴파일 PDF 로드 실패', err));
+  } else {
+    pdfViewer.destroy();
+    if (pdfBody) pdfBody.innerHTML = '<div class="pdf-placeholder">컴파일하면 여기에 PDF가 표시됩니다</div>';
+  }
+}
+
+async function uploadLatexZip(file) {
+  if (!isZip(file)) { showToast('ZIP 파일만 업로드할 수 있어요.'); return; }
+  showToast('LaTeX 프로젝트 업로드 중...');
+  try {
+    const res = await fetch('/api/library/projects', {
+      method: 'POST', headers: { 'X-Filename': encodeURIComponent(file.name) }, body: file,
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+    await refreshLatexProjects();
+    await openLatexProject(j.project.id);
+    // 엔진이 있으면 채팅 없이 바로 컴파일
+    if (state.latexEngine) {
+      await compileLatex();
+    } else {
+      showToast('프로젝트 생성됨 — LaTeX 컴파일러를 설치하면 컴파일할 수 있어요');
+    }
+  } catch (err) {
+    showToast('업로드 실패: ' + err.message);
+  }
+}
+
+async function refreshLatexProjects() {
+  try {
+    const res = await fetch('/api/library/projects');
+    const j = await res.json();
+    state.latexProjects = j.projects || [];
+  } catch { state.latexProjects = []; }
+  renderLatexSidebar();
+}
+
+function renderLatexSidebar() {
+  if (!latexTreeEl) return;
+  latexTreeEl.innerHTML = '';
+  for (const p of state.latexProjects) latexTreeEl.appendChild(buildProjectItem(p));
+}
+
+function buildProjectItem(p) {
+  const item = document.createElement('div');
+  item.className = 'paper-item project-item' + (p.id === state.currentProjectId && state.mode === 'latex' ? ' active' : '');
+  item.dataset.projectId = p.id;
+  const icon = document.createElement('span'); icon.className = 'paper-icon'; icon.textContent = '📝';
+  const title = document.createElement('span'); title.className = 'paper-title'; title.textContent = p.name || 'LaTeX'; title.title = p.name || '';
+  const del = document.createElement('button'); del.type = 'button'; del.className = 'row-menu'; del.textContent = '×'; del.title = '삭제';
+  del.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (!confirm(`"${p.name}" 프로젝트를 삭제할까요? (되돌릴 수 없음)`)) return;
+    await deleteLatexProject(p.id);
+  });
+  item.append(icon, title, del);
+  item.addEventListener('click', (e) => { if (e.target.closest('.row-menu')) return; openLatexProject(p.id); });
+  return item;
+}
+
+async function deleteLatexProject(id) {
+  try {
+    await fetch(`/api/library/projects/${id}`, { method: 'DELETE' });
+    if (state.currentProjectId === id) clearConversation();
+    await refreshLatexProjects();
+  } catch (err) {
+    showToast('삭제 실패: ' + err.message);
+  }
 }
 
 function startNewAnalysis() {
@@ -1589,13 +2142,7 @@ async function loadLlmIntoModal() {
 }
 
 function flashLlmStatus(text, isError = false) {
-  llmStatus.textContent = text;
-  llmStatus.classList.toggle('error', !!isError);
-  llmStatus.classList.add('visible');
-  setTimeout(() => {
-    llmStatus.classList.remove('visible');
-    llmStatus.textContent = '';
-  }, 2000);
+  flashPromptsStatus(text, isError); // 모델 저장 상태도 하단 공용 상태에 표시
 }
 
 async function openSettings() {
@@ -1678,9 +2225,11 @@ function applyAuthStatus() {
 
 attachZone.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', () => {
-  if (fileInput.files && fileInput.files[0]) {
-    setAttachment(fileInput.files[0]);
-  }
+  const f = fileInput.files && fileInput.files[0];
+  if (!f) return;
+  if (isZip(f)) uploadLatexZip(f);   // zip → 바로 컴파일 프로젝트
+  else setAttachment(f);             // pdf → 분석
+  fileInput.value = '';
 });
 attachClear.addEventListener('click', () => {
   clearAttachment();
@@ -1719,6 +2268,11 @@ window.addEventListener('dragenter', (e) => {
   if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
   e.preventDefault();
   dragDepth++;
+  if (dropOverlayCard) {
+    dropOverlayCard.textContent = state.mode === 'latex'
+      ? '이미지를 놓으면 프로젝트에 추가됩니다 (ZIP은 새 프로젝트)'
+      : 'PDF를 여기에 놓으세요';
+  }
   dropOverlay.hidden = false;
 });
 window.addEventListener('dragover', (e) => {
@@ -1738,8 +2292,55 @@ window.addEventListener('drop', (e) => {
   e.preventDefault();
   dragDepth = 0;
   dropOverlay.hidden = true;
-  const files = e.dataTransfer?.files;
-  if (files && files[0]) setAttachment(files[0]);
+  const files = Array.from(e.dataTransfer?.files || []);
+  if (!files.length) return;
+  // LaTeX 모드: 이미지는 현재 프로젝트에 추가, ZIP은 새 프로젝트
+  if (state.mode === 'latex' && state.currentProjectId) {
+    const imgs = files.filter(isImageFile);
+    if (imgs.length) { (async () => { for (const img of imgs) await uploadProjectAsset(img); })(); return; }
+    const zip = files.find(isZip);
+    if (zip) { uploadLatexZip(zip); return; }
+    showToast('이미지 파일 또는 ZIP만 추가할 수 있어요');
+    return;
+  }
+  const f = files[0];
+  if (isZip(f)) uploadLatexZip(f);
+  else setAttachment(f);
+});
+
+// LaTeX 모드 이벤트
+if (newLatexBtn) newLatexBtn.addEventListener('click', () => zipInput && zipInput.click());
+if (zipInput) zipInput.addEventListener('change', () => {
+  const f = zipInput.files && zipInput.files[0];
+  if (f) uploadLatexZip(f);
+  zipInput.value = '';
+});
+if (latexCompileBtn) latexCompileBtn.addEventListener('click', compileLatex);
+if (latexUploadBtn) latexUploadBtn.addEventListener('click', () => latexAssetInput && latexAssetInput.click());
+if (latexAssetInput) latexAssetInput.addEventListener('change', async () => {
+  const files = Array.from(latexAssetInput.files || []);
+  for (const f of files) await uploadProjectAsset(f);
+  latexAssetInput.value = '';
+});
+if (latexChatSend) latexChatSend.addEventListener('click', sendLatexChat);
+if (latexChatInput) latexChatInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendLatexChat(); }
+});
+if (latexZipBtn) latexZipBtn.addEventListener('click', () => {
+  if (!state.currentProjectId) return;
+  const a = document.createElement('a');
+  a.href = `/api/library/projects/${state.currentProjectId}/zip`;
+  a.download = ((latexTitle && latexTitle.textContent) || 'project') + '.zip';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+});
+if (latexLogBtn) latexLogBtn.addEventListener('click', () => { if (latexLog) latexLog.hidden = !latexLog.hidden; });
+if (latexLogClose) latexLogClose.addEventListener('click', () => { if (latexLog) latexLog.hidden = true; });
+if (latexCompileStatus) latexCompileStatus.addEventListener('click', () => {
+  if (latexCompileStatus.classList.contains('fail') || latexCompileStatus.classList.contains('warn')) {
+    if (latexLog) latexLog.hidden = false;
+  }
 });
 
 // 설정 모달
@@ -1751,28 +2352,28 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !settingsModal.hidden) closeSettings();
   else if (e.key === 'Escape' && pdfViewer?.isSelectionMode?.()) setPdfSelectionMode(false);
 });
-settingsModal.querySelectorAll('.tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    settingsModal.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    settingsModal.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
-    tab.classList.add('active');
-    const target = tab.getAttribute('data-tab');
-    settingsModal.querySelector(`.tab-pane[data-pane="${target}"]`).classList.add('active');
+// 2단 탭: 상위(분석팀/작성팀) × 하위(오케스트레이터/팀원/모델)
+let settingsTeam = 'analysis';
+let settingsSection = 'orchestrator';
+function applySettingsTabs() {
+  settingsModal.querySelectorAll('.team-tab').forEach(t => t.classList.toggle('active', t.dataset.team === settingsTeam));
+  settingsModal.querySelectorAll('.section-tab').forEach(t => t.classList.toggle('active', t.dataset.section === settingsSection));
+  settingsModal.querySelectorAll('.settings-pane').forEach(p => {
+    p.classList.toggle('active', p.dataset.team === settingsTeam && p.dataset.section === settingsSection);
   });
-});
+}
+settingsModal.querySelectorAll('.team-tab').forEach(t => t.addEventListener('click', () => { settingsTeam = t.dataset.team; applySettingsTabs(); }));
+settingsModal.querySelectorAll('.section-tab').forEach(t => t.addEventListener('click', () => { settingsSection = t.dataset.section; applySettingsTabs(); }));
 settingsModal.querySelectorAll('[data-reset]').forEach(btn => {
   btn.addEventListener('click', () => resetPromptField(btn.getAttribute('data-reset')));
 });
 async function savePrompts() {
   savePromptsBtn.disabled = true;
   try {
-    const body = {
-      analyst: promptAnalyst.value,
-      verifier: promptVerifier.value,
-      writer: promptWriter.value,
-      coreInsight: promptCoreInsight.value,
-      orchestrator: promptOrchestrator.value,
-    };
+    const body = {};
+    for (const [key, el] of Object.entries(PROMPT_FIELDS)) {
+      if (el) body[key] = el.value;
+    }
     const res = await fetch('/api/prompts', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -1793,7 +2394,7 @@ async function savePrompts() {
 }
 
 async function saveLlmConfig() {
-  saveLlmBtn.disabled = true;
+  if (saveLlmBtn) saveLlmBtn.disabled = true;
   savePromptsBtn.disabled = true;
   try {
     const body = {};
@@ -1820,30 +2421,26 @@ async function saveLlmConfig() {
   } catch (err) {
     flashLlmStatus(`네트워크 오류: ${err.message}`, true);
   } finally {
-    saveLlmBtn.disabled = false;
+    if (saveLlmBtn) saveLlmBtn.disabled = false;
     savePromptsBtn.disabled = false;
   }
 }
 
+// 하단 저장 버튼 하나로 프롬프트 + 모델 설정을 함께 저장
 savePromptsBtn.addEventListener('click', async () => {
-  const activeTab = settingsModal.querySelector('.tab.active')?.dataset.tab;
-  if (activeTab === 'llm') {
-    await saveLlmConfig();
-  } else {
-    await savePrompts();
-  }
+  await savePrompts();
+  await saveLlmConfig();
 });
 
-saveLlmBtn.addEventListener('click', saveLlmConfig);
-
-resetLlmBtn.addEventListener('click', async () => {
+// 모델 기본값 리셋 (각 모델 패널의 버튼)
+settingsModal.querySelectorAll('.reset-llm-btn').forEach(btn => btn.addEventListener('click', async () => {
   try {
     const res = await fetch('/api/llm-config/defaults');
     if (!res.ok) return;
     const json = await res.json();
     fillLlmRows(json);
   } catch { /* ignore */ }
-});
+}));
 
 // 로그인 상태 버튼들
 if (authBannerRefreshBtn) authBannerRefreshBtn.addEventListener('click', () => fetchAuthStatus(true));
@@ -1884,6 +2481,9 @@ function saveFolderOpenState(map) {
 }
 
 function renderSidebar() {
+  renderLatexSidebar();
+  // 대화/핵심분석 탭은 논문 분석 컨텍스트(mode 'paper')에서만 노출
+  if (workspaceTabsBar) workspaceTabsBar.hidden = state.mode !== 'paper';
   const openState = loadFolderOpenState();
   libraryTreeEl.innerHTML = '';
   const tree = state.libraryTree || { folders: [], unfoldered: [] };
@@ -2026,6 +2626,7 @@ async function openPaper(paperId) {
       return;
     }
     const { paper, analysis, chats } = await res.json();
+    if (state.mode === 'latex') exitLatexMode();
     state.mode = 'paper';
     state.currentPaperId = paper.id;
     state.currentAnalysisId = analysis ? analysis.id : null;
@@ -2069,6 +2670,7 @@ async function openPaper(paperId) {
       }
     }
     renderAnalysisMatrix();
+    setWorkspaceTab('chat');
     showPaperPdf(paper.id, paper.source_file || paper.title || '논문');
     updateComposerMode();
     updateSendState();
@@ -2345,3 +2947,4 @@ updateComposerMode();
 updateSendState();
 fetchAuthStatus();
 refreshLibrary();
+refreshLatexProjects();
