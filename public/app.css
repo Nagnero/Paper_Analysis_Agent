@@ -74,6 +74,7 @@ html, body {
   flex-direction: column;
   overflow: hidden;
 }
+#chatPane[hidden] { display: none; }
 .workspace-tabs {
   flex-shrink: 0;
   display: flex;
