@@ -471,6 +471,7 @@ const workspaceTabsBar = $('workspaceTabsBar');
 const latexPane = $('latexPane');
 const latexTitle = $('latexTitle');
 const latexSaveState = $('latexSaveState');
+const latexCompileStatus = $('latexCompileStatus');
 const latexCompileBtn = $('latexCompileBtn');
 const latexLogBtn = $('latexLogBtn');
 const latexEngineBanner = $('latexEngineBanner');
@@ -1546,12 +1547,18 @@ function isZip(file) {
 function enterLatexMode() {
   if (chatPane) chatPane.hidden = true;
   if (latexPane) latexPane.hidden = false;
+  // 우측 PDF 패널을 컴파일 결과 전용으로: 분석용 컨트롤 숨기고 절반 폭으로
+  if (pdfSelectBtn) pdfSelectBtn.hidden = true;
+  if (pdfCloseBtn) pdfCloseBtn.hidden = true;
+  if (pdfPane && workspaceEl) pdfPane.style.width = Math.round(workspaceEl.clientWidth * 0.5) + 'px';
 }
 
 function exitLatexMode() {
   if (state.mode === 'latex' && state.latexDirty) { saveCurrentLatexFile(); }
   if (latexPane) latexPane.hidden = true;
   if (chatPane) chatPane.hidden = false;
+  if (pdfSelectBtn) pdfSelectBtn.hidden = false;
+  if (pdfCloseBtn) pdfCloseBtn.hidden = false;
   state.currentProjectId = null;
   state.currentLatexFile = null;
   state.latexMainFile = null;
@@ -1628,8 +1635,9 @@ async function openLatexProject(id) {
       showToast('에디터 로딩 실패: ' + err.message);
     }
     updateLatexSaveState();
+    setLatexCompileStatus(hasPdf ? 'ok' : '');
     await refreshLatexEngineBanner();
-    if (hasPdf) showProjectPdf(id); else clearPdf();
+    showProjectPdf(id, hasPdf); // 우측 PDF 패널 항상 표시(없으면 placeholder)
     renderSidebar();
     setTimeout(() => { if (latexEditor) latexEditor.layout(); }, 60);
   } catch (err) {
@@ -1707,13 +1715,16 @@ async function compileLatex() {
     const j = await res.json().catch(() => ({}));
     showLatexLog(j.log || j.error || '(로그 없음)');
     if (j.hasPdf) {
-      showProjectPdf(state.currentProjectId);
+      showProjectPdf(state.currentProjectId, true);
+      setLatexCompileStatus(j.ok ? 'ok' : 'warn');
       if (!j.ok) showToast('경고와 함께 컴파일됨 — 로그 확인');
     } else {
+      setLatexCompileStatus('fail');
       if (latexLog) latexLog.hidden = false;
       showToast('컴파일 실패 — 로그를 확인하세요');
     }
   } catch (err) {
+    setLatexCompileStatus('fail');
     showToast('컴파일 요청 실패: ' + err.message);
   } finally {
     state.latexBusy = false;
@@ -1721,23 +1732,42 @@ async function compileLatex() {
   }
 }
 
+// 컴파일 상태 배지: ''(숨김) | 'ok' | 'warn' | 'fail'
+function setLatexCompileStatus(kind) {
+  if (!latexCompileStatus) return;
+  const map = {
+    ok:   { text: '✓ 컴파일 성공', cls: 'ok' },
+    warn: { text: '⚠ 경고와 함께 컴파일', cls: 'warn' },
+    fail: { text: '✗ 컴파일 실패 (로그 확인)', cls: 'fail' },
+  };
+  const m = map[kind];
+  latexCompileStatus.hidden = !m;
+  latexCompileStatus.className = 'latex-compile-status' + (m ? ' ' + m.cls : '');
+  latexCompileStatus.textContent = m ? m.text : '';
+}
+
 function showLatexLog(text) {
   if (latexLogBody) latexLogBody.textContent = text || '';
 }
 
-// 컴파일 결과 PDF 를 우측 패널(PDF.js)에 로드. recompile 시 캐시 무력화.
-function showProjectPdf(projectId) {
+// 컴파일 결과 PDF 를 우측 패널(PDF.js)에 로드. 컴파일 전이면 빈 상태로 패널만 연다.
+function showProjectPdf(projectId, hasPdf = true) {
   if (!pdfViewer) return;
   revokePdfBlob();
   setPdfTitle('컴파일 결과');
-  const url = `/api/library/projects/${projectId}/pdf?t=${Date.now()}`;
-  if (pdfOpenExternal) pdfOpenExternal.href = url;
   pdfState.paperId = null;
   pdfState.available = true;
   pdfState.open = true;
   applyPdfLayout();
   pdfViewer.currentPaperId = null;
-  pdfViewer.load(url).catch(err => console.warn('컴파일 PDF 로드 실패', err));
+  if (hasPdf) {
+    const url = `/api/library/projects/${projectId}/pdf?t=${Date.now()}`;
+    if (pdfOpenExternal) pdfOpenExternal.href = url;
+    pdfViewer.load(url).catch(err => console.warn('컴파일 PDF 로드 실패', err));
+  } else {
+    pdfViewer.destroy();
+    if (pdfBody) pdfBody.innerHTML = '<div class="pdf-placeholder">컴파일하면 여기에 PDF가 표시됩니다</div>';
+  }
 }
 
 async function uploadLatexZip(file) {
@@ -2055,6 +2085,11 @@ if (zipInput) zipInput.addEventListener('change', () => {
 if (latexCompileBtn) latexCompileBtn.addEventListener('click', compileLatex);
 if (latexLogBtn) latexLogBtn.addEventListener('click', () => { if (latexLog) latexLog.hidden = !latexLog.hidden; });
 if (latexLogClose) latexLogClose.addEventListener('click', () => { if (latexLog) latexLog.hidden = true; });
+if (latexCompileStatus) latexCompileStatus.addEventListener('click', () => {
+  if (latexCompileStatus.classList.contains('fail') || latexCompileStatus.classList.contains('warn')) {
+    if (latexLog) latexLog.hidden = false;
+  }
+});
 
 // 설정 모달
 openSettingsBtn.addEventListener('click', openSettings);

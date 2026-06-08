@@ -1536,6 +1536,21 @@ button { font-family: inherit; }
 .latex-title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .latex-savestate { font-size: 11.5px; color: var(--muted); flex-shrink: 0; }
 .latex-savestate.error { color: var(--error); }
+.latex-compile-status { font-size: 11.5px; flex-shrink: 0; padding: 2px 8px; border-radius: 10px; }
+.latex-compile-status[hidden] { display: none; }
+.latex-compile-status.ok { color: #7ee08a; background: rgba(60, 200, 100, 0.12); }
+.latex-compile-status.warn { color: #e8c468; background: rgba(255, 180, 0, 0.14); cursor: pointer; }
+.latex-compile-status.fail { color: #ff8585; background: rgba(255, 80, 80, 0.14); cursor: pointer; }
+.pdf-placeholder {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 24px;
+  text-align: center;
+}
 .latex-head .spacer { flex: 1; }
 .latex-btn {
   border: 1px solid var(--border); background: transparent; color: var(--text);
