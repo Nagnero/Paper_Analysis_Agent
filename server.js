@@ -23,7 +23,7 @@ import { buildCitationRefMap, citationRefsForText, stripInvalidCitationMarkers }
 import * as latexProject from './core/latexProject.js';
 import { detectEngine, compileProject } from './core/latexCompiler.js';
 import { reverseLookup as synctexReverse } from './core/synctex.js';
-import { editLatex } from './agents/latexEditor.js';
+import { runPaperWriting } from './agents/paperWriting.js';
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 const MAX_JSON_BODY_BYTES = 1 * 1024 * 1024;
@@ -1164,23 +1164,22 @@ async function handleProjectChatEdit(req, res, id) {
     if (!instruction) return jsonResponse(res, 400, { error: 'instruction required' });
     if (instruction.length > 8000) return jsonResponse(res, 413, { error: '지시가 너무 깁니다 (최대 8000자).' });
 
-    // 인증 게이트 (분석 채팅과 동일하게 chat 역할 사용)
+    // 인증 게이트: 작성팀 오케스트레이터 역할의 백엔드 기준
     const auth = await authStatus.checkAll();
     llmConfig.applyAvailability(auth);
-    const llm = llmConfig.getRole('chat');
+    const llm = llmConfig.getRole('writeOrchestrator');
     const entry = auth[llm.backend];
     if (!entry || !entry.loggedIn) {
       return jsonResponse(res, 401, { error: `${llm.backend}에 로그인이 필요합니다. 설정에서 다른 백엔드로 바꾸거나 로그인하세요.` });
     }
 
-    let content;
-    try { content = await latexProject.readProjectFile(id, file); }
-    catch (err) { return jsonResponse(res, 400, { error: `파일 읽기 실패: ${err.message}` }); }
-
-    const result = await editLatex({ fileName: file, content, instruction, llm });
-    await latexProject.writeProjectFile(id, file, result.content);
+    // 오케스트레이터 → 모듈 → 컴파일 게이트
+    const result = await runPaperWriting({ projectId: id, file, mainFile: project.main_file, instruction });
     await library.touchProject(id).catch(() => {});
-    jsonResponse(res, 200, { ok: true, file, content: result.content, note: result.note });
+    jsonResponse(res, 200, {
+      ok: true, file: result.file, content: result.content, note: result.note,
+      module: result.module, compiled: result.compiled, fixes: result.fixes, log: result.log,
+    });
   } catch (err) {
     jsonResponse(res, 500, { error: err.message });
   }

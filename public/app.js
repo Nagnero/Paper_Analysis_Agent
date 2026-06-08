@@ -497,8 +497,16 @@ const promptVerifier = $('promptVerifier');
 const promptWriter = $('promptWriter');
 const promptCoreInsight = $('promptCoreInsight');
 const promptOrchestrator = $('promptOrchestrator');
-const PROMPT_FIELDS = { analyst: promptAnalyst, verifier: promptVerifier, writer: promptWriter, coreInsight: promptCoreInsight, orchestrator: promptOrchestrator };
-const LLM_ROLES = ['orchestrator', 'analyst', 'verifier', 'writer', 'coreInsight', 'chat'];
+const PROMPT_FIELDS = {
+  analyst: promptAnalyst, verifier: promptVerifier, writer: promptWriter, coreInsight: promptCoreInsight, orchestrator: promptOrchestrator,
+  // 논문 작성팀
+  writeOrchestrator: $('promptWriteOrchestrator'), writeBody: $('promptWriteBody'),
+  writeFigure: $('promptWriteFigure'), writeCitation: $('promptWriteCitation'), writeCompile: $('promptWriteCompile'),
+};
+const LLM_ROLES = [
+  'orchestrator', 'analyst', 'verifier', 'writer', 'coreInsight', 'chat',
+  'writeOrchestrator', 'writeBody', 'writeFigure', 'writeCitation', 'writeCompile',
+];
 const saveLlmBtn = $('saveLlmBtn');
 const resetLlmBtn = $('resetLlmBtn');
 const llmStatus = $('llmStatus');
@@ -1802,13 +1810,19 @@ async function sendLatexChat() {
     });
     const j = await res.json().catch(() => ({}));
     if (!res.ok || !j.ok) throw new Error(j.error || `HTTP ${res.status}`);
-    if (pending) pending.textContent = '🤖 ' + (j.note || '수정 완료');
-    if (latexEditor && typeof j.content === 'string') {
+    const moduleLabel = { writing: '✍️ 본문', figure: '📊 그림/표', citation: '📚 인용' }[j.module] || '';
+    if (pending) pending.textContent = `🤖 ${moduleLabel ? '[' + moduleLabel + '] ' : ''}${j.note || '수정 완료'}`;
+    // 편집한 파일이 현재 열린 파일이면 에디터에 반영
+    if (latexEditor && typeof j.content === 'string' && j.file === state.currentLatexFile) {
       latexEditor.setContent(state.currentLatexFile, j.content);
       state.latexDirty = false;
       updateLatexSaveState();
     }
-    await compileLatex(); // 결과 바로 반영
+    // 서버가 이미 컴파일(+에러수정 루프)했으므로 결과 PDF만 다시 로드
+    showLatexLog(j.log || '');
+    setLatexCompileStatus(j.compiled ? 'ok' : 'fail');
+    showProjectPdf(state.currentProjectId, !!j.compiled);
+    if (!j.compiled && latexLog) latexLog.hidden = false;
   } catch (err) {
     if (pending) { pending.textContent = '🤖 실패: ' + err.message; pending.classList.add('error'); }
   } finally {

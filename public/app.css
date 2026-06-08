@@ -1385,6 +1385,7 @@ button { font-family: inherit; }
   font-size: 12.5px;
   outline: none;
 }
+.llm-section-label { margin: 12px 0 4px; font-size: 11px; color: var(--muted); text-align: center; letter-spacing: 0.5px; }
 .llm-row select.llm-backend { flex: 0 0 100px; }
 .llm-row select.llm-model { flex: 1 1 0; min-width: 0; }
 .llm-row select.llm-reasoning { flex: 0 0 160px; min-width: 0; }

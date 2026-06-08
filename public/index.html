@@ -168,6 +168,7 @@
       <div class="modal-tabs">
         <button type="button" class="tab active" data-tab="orchestrator">오케스트레이터</button>
         <button type="button" class="tab" data-tab="team">분석팀</button>
+        <button type="button" class="tab" data-tab="writeTeam">작성팀</button>
         <button type="button" class="tab" data-tab="llm">모델</button>
         <button type="button" class="tab" data-tab="danger">위험 영역</button>
       </div>
@@ -215,6 +216,44 @@
             </div>
           </details>
         </div>
+        <div class="tab-pane" data-pane="writeTeam">
+          <p class="llm-hint">논문 작성팀: 오케스트레이터가 지시를 분류해 본문/그림·표/인용 모듈로 보내고, 변경 후 컴파일 모듈이 항상 실행되어 오류를 자동 수정합니다. (STORM식 계획-우선 + self-reflection)</p>
+          <details class="team-agent" open>
+            <summary>작성 오케스트레이터 — 지시를 모듈로 분류 (JSON)</summary>
+            <div class="team-agent-body">
+              <textarea id="promptWriteOrchestrator" spellcheck="false"></textarea>
+              <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="writeOrchestrator">기본값으로 채우기 (저장 필요)</button></div>
+            </div>
+          </details>
+          <details class="team-agent">
+            <summary>본문 작성 — 텍스트 작성·수정 (LaTeX)</summary>
+            <div class="team-agent-body">
+              <textarea id="promptWriteBody" spellcheck="false"></textarea>
+              <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="writeBody">기본값으로 채우기 (저장 필요)</button></div>
+            </div>
+          </details>
+          <details class="team-agent">
+            <summary>그림·표 — tikz/표 생성·수정 (LaTeX)</summary>
+            <div class="team-agent-body">
+              <textarea id="promptWriteFigure" spellcheck="false"></textarea>
+              <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="writeFigure">기본값으로 채우기 (저장 필요)</button></div>
+            </div>
+          </details>
+          <details class="team-agent">
+            <summary>인용 — .bib 근거 인용 삽입 (LaTeX)</summary>
+            <div class="team-agent-body">
+              <textarea id="promptWriteCitation" spellcheck="false"></textarea>
+              <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="writeCitation">기본값으로 채우기 (저장 필요)</button></div>
+            </div>
+          </details>
+          <details class="team-agent">
+            <summary>컴파일 수정 — 컴파일 오류 자동 수정 (LaTeX)</summary>
+            <div class="team-agent-body">
+              <textarea id="promptWriteCompile" spellcheck="false"></textarea>
+              <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="writeCompile">기본값으로 채우기 (저장 필요)</button></div>
+            </div>
+          </details>
+        </div>
         <div class="tab-pane" data-pane="llm">
           <p class="llm-hint">각 에이전트별로 백엔드(Claude / Codex)·모델·추론 강도를 지정합니다. 모델은 가운데, 추론 강도는 오른쪽 드롭다운에서 고릅니다. 지원 강도는 모델마다 다릅니다(Opus 4.8: low~max, Sonnet 4.6: max까지·xhigh 없음, Haiku: 강도 미지원, Codex: low~xhigh).<br>채팅: 분석 후 사용자가 같은 논문에 대해 질문할 때 사용.</p>
           <div class="llm-row" data-role="orchestrator">
@@ -249,6 +288,37 @@
           </div>
           <div class="llm-row" data-role="chat">
             <label>채팅</label>
+            <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
+            <select class="llm-model"></select>
+            <select class="llm-reasoning"></select>
+          </div>
+          <div class="llm-section-label">— 논문 작성팀 —</div>
+          <div class="llm-row" data-role="writeOrchestrator">
+            <label>작성 오케스트레이터</label>
+            <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
+            <select class="llm-model"></select>
+            <select class="llm-reasoning"></select>
+          </div>
+          <div class="llm-row" data-role="writeBody">
+            <label>본문 작성</label>
+            <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
+            <select class="llm-model"></select>
+            <select class="llm-reasoning"></select>
+          </div>
+          <div class="llm-row" data-role="writeFigure">
+            <label>그림·표</label>
+            <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
+            <select class="llm-model"></select>
+            <select class="llm-reasoning"></select>
+          </div>
+          <div class="llm-row" data-role="writeCitation">
+            <label>인용</label>
+            <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
+            <select class="llm-model"></select>
+            <select class="llm-reasoning"></select>
+          </div>
+          <div class="llm-row" data-role="writeCompile">
+            <label>컴파일 수정</label>
             <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
             <select class="llm-model"></select>
             <select class="llm-reasoning"></select>
