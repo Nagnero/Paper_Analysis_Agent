@@ -262,19 +262,33 @@
         </div>
         <!-- 작성팀 · 팀원 에이전트 -->
         <div class="settings-pane" data-team="writing" data-section="agents">
-          <p class="llm-hint">본문/그림·표/인용 모듈 + 항상 실행되는 컴파일 수정 모듈.</p>
+          <p class="llm-hint">본문·그림/표 모듈은 <b>계획 → 작성 → 검토</b> 멀티에이전트로 동작합니다(STORM식). 인용은 단일, 컴파일 수정은 변경 시마다 항상 실행.</p>
           <details class="team-agent" open>
-            <summary>본문 작성 — 텍스트 작성·수정 (LaTeX)</summary>
+            <summary>계획 (Planner) — 작성 전 개요·계획 수립 (본문·그림 공용)</summary>
+            <div class="team-agent-body">
+              <textarea id="promptWritePlan" spellcheck="false"></textarea>
+              <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="writePlan">기본값으로 채우기 (저장 필요)</button></div>
+            </div>
+          </details>
+          <details class="team-agent">
+            <summary>본문 작성 (Writer) — 텍스트 작성·수정 (LaTeX)</summary>
             <div class="team-agent-body">
               <textarea id="promptWriteBody" spellcheck="false"></textarea>
               <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="writeBody">기본값으로 채우기 (저장 필요)</button></div>
             </div>
           </details>
           <details class="team-agent">
-            <summary>그림·표 — tikz/표 생성·수정 (LaTeX)</summary>
+            <summary>그림·표 (Writer) — tikz/표 생성·수정 (LaTeX)</summary>
             <div class="team-agent-body">
               <textarea id="promptWriteFigure" spellcheck="false"></textarea>
               <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="writeFigure">기본값으로 채우기 (저장 필요)</button></div>
+            </div>
+          </details>
+          <details class="team-agent">
+            <summary>검토 (Reviewer) — 초안 검토·다듬기 (본문·그림 공용)</summary>
+            <div class="team-agent-body">
+              <textarea id="promptWriteReview" spellcheck="false"></textarea>
+              <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="writeReview">기본값으로 채우기 (저장 필요)</button></div>
             </div>
           </details>
           <details class="team-agent">
@@ -301,6 +315,12 @@
             <select class="llm-model"></select>
             <select class="llm-reasoning"></select>
           </div>
+          <div class="llm-row" data-role="writePlan">
+            <label>계획 (Planner)</label>
+            <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
+            <select class="llm-model"></select>
+            <select class="llm-reasoning"></select>
+          </div>
           <div class="llm-row" data-role="writeBody">
             <label>본문 작성</label>
             <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
@@ -309,6 +329,12 @@
           </div>
           <div class="llm-row" data-role="writeFigure">
             <label>그림·표</label>
+            <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
+            <select class="llm-model"></select>
+            <select class="llm-reasoning"></select>
+          </div>
+          <div class="llm-row" data-role="writeReview">
+            <label>검토 (Reviewer)</label>
             <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
             <select class="llm-model"></select>
             <select class="llm-reasoning"></select>

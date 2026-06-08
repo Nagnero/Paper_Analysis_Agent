@@ -499,13 +499,14 @@ const promptCoreInsight = $('promptCoreInsight');
 const promptOrchestrator = $('promptOrchestrator');
 const PROMPT_FIELDS = {
   analyst: promptAnalyst, verifier: promptVerifier, writer: promptWriter, coreInsight: promptCoreInsight, orchestrator: promptOrchestrator,
-  // 논문 작성팀
-  writeOrchestrator: $('promptWriteOrchestrator'), writeBody: $('promptWriteBody'),
-  writeFigure: $('promptWriteFigure'), writeCitation: $('promptWriteCitation'), writeCompile: $('promptWriteCompile'),
+  // 논문 작성팀 (본문/그림은 계획→작성→검토 멀티에이전트)
+  writeOrchestrator: $('promptWriteOrchestrator'), writePlan: $('promptWritePlan'),
+  writeBody: $('promptWriteBody'), writeFigure: $('promptWriteFigure'), writeReview: $('promptWriteReview'),
+  writeCitation: $('promptWriteCitation'), writeCompile: $('promptWriteCompile'),
 };
 const LLM_ROLES = [
   'orchestrator', 'analyst', 'verifier', 'writer', 'coreInsight', 'chat',
-  'writeOrchestrator', 'writeBody', 'writeFigure', 'writeCitation', 'writeCompile',
+  'writeOrchestrator', 'writePlan', 'writeBody', 'writeFigure', 'writeReview', 'writeCitation', 'writeCompile',
 ];
 const saveLlmBtn = $('saveLlmBtn');
 const resetLlmBtn = $('resetLlmBtn');

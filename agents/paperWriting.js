@@ -54,10 +54,29 @@ async function collectBibKeys(projectId) {
 }
 
 const MODULE_MAP = {
-  writing: { prompt: 'writeBody', role: 'writeBody' },
-  figure: { prompt: 'writeFigure', role: 'writeFigure' },
+  writing: { prompt: 'writeBody', role: 'writeBody', type: '본문' },
+  figure: { prompt: 'writeFigure', role: 'writeFigure', type: '그림/표' },
   citation: { prompt: 'writeCitation', role: 'writeCitation' },
 };
+
+// Planner: 텍스트 계획 반환(코드블록 없음)
+async function planStep(moduleType, fileName, content, instruction) {
+  const prompts = await getPrompts();
+  const role = llmConfig.getRole('writePlan');
+  const out = await callLLM(fillTemplate(prompts.writePlan, { moduleType, fileName, content, instruction }), {
+    backend: role.backend, model: role.model, reasoningEffort: role.reasoningEffort, timeoutMs: 180_000,
+  });
+  return (out || '').trim();
+}
+
+// 본문/그림 모듈: 계획 → 작성 → 검토 (멀티에이전트, STORM식)
+async function multiAgentEdit({ module, fileName, content, instruction }) {
+  const sel = MODULE_MAP[module];
+  const plan = await planStep(sel.type, fileName, content, instruction);
+  const draft = await runModule(sel.prompt, sel.role, { fileName, content, instruction, plan });
+  const reviewed = await runModule('writeReview', 'writeReview', { fileName, content: draft.content, instruction, plan });
+  return { content: reviewed.content, note: `[계획→작성→검토] ${reviewed.note}` };
+}
 
 /**
  * @param {{ projectId:number, file:string, mainFile:string, instruction:string }} args
@@ -81,11 +100,14 @@ export async function runPaperWriting({ projectId, file, mainFile, instruction }
     if (typeof j.refinedInstruction === 'string' && j.refinedInstruction.trim()) refined = j.refinedInstruction.trim();
   } catch { /* 분류 실패 → writing + 원지시 */ }
 
-  // 2) 모듈 실행
-  const sel = MODULE_MAP[module] || MODULE_MAP.writing;
-  const vars = { fileName: file, content, instruction: refined };
-  if (module === 'citation') vars.bibKeys = (await collectBibKeys(projectId)).join(', ') || '(없음)';
-  const edit = await runModule(sel.prompt, sel.role, vars);
+  // 2) 모듈 실행 — 본문/그림은 멀티에이전트(계획→작성→검토), 인용은 단일
+  let edit;
+  if (module === 'citation') {
+    const bibKeys = (await collectBibKeys(projectId)).join(', ') || '(없음)';
+    edit = await runModule('writeCitation', 'writeCitation', { fileName: file, content, instruction: refined, bibKeys });
+  } else {
+    edit = await multiAgentEdit({ module, fileName: file, content, instruction: refined });
+  }
   await latexProject.writeProjectFile(projectId, file, edit.content);
 
   // 3) 컴파일 게이트 + 에러 수정 루프

@@ -10,8 +10,8 @@ const PROMPTS_DIR = path.join(__dirname, '..', 'prompts');
 
 const KEYS = [
   'analyst', 'verifier', 'writer', 'orchestrator', 'coreInsight',
-  // 논문 작성팀
-  'writeOrchestrator', 'writeBody', 'writeFigure', 'writeCitation', 'writeCompile',
+  // 논문 작성팀 (본문/그림은 계획→작성→검토 멀티에이전트)
+  'writeOrchestrator', 'writePlan', 'writeBody', 'writeFigure', 'writeReview', 'writeCitation', 'writeCompile',
 ];
 
 /** 디스크에서 기본 프롬프트 읽기 */
