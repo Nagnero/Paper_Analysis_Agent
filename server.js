@@ -820,7 +820,11 @@ async function handlePromptsPut(req, res) {
   }
   const current = await getPrompts();
   const next = { ...current };
-  for (const k of ['analyst', 'verifier', 'writer', 'orchestrator', 'coreInsight']) {
+  const allowedPromptKeys = [
+    'analyst', 'verifier', 'writer', 'orchestrator', 'coreInsight',
+    'writeOrchestrator', 'writeBody', 'writeFigure', 'writeCitation', 'writeCompile',
+  ];
+  for (const k of allowedPromptKeys) {
     if (k in payload) {
       if (typeof payload[k] !== 'string') {
         res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });

@@ -1998,13 +1998,7 @@ async function loadLlmIntoModal() {
 }
 
 function flashLlmStatus(text, isError = false) {
-  llmStatus.textContent = text;
-  llmStatus.classList.toggle('error', !!isError);
-  llmStatus.classList.add('visible');
-  setTimeout(() => {
-    llmStatus.classList.remove('visible');
-    llmStatus.textContent = '';
-  }, 2000);
+  flashPromptsStatus(text, isError); // 모델 저장 상태도 하단 공용 상태에 표시
 }
 
 async function openSettings() {
@@ -2194,28 +2188,28 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !settingsModal.hidden) closeSettings();
   else if (e.key === 'Escape' && pdfViewer?.isSelectionMode?.()) setPdfSelectionMode(false);
 });
-settingsModal.querySelectorAll('.tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    settingsModal.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    settingsModal.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
-    tab.classList.add('active');
-    const target = tab.getAttribute('data-tab');
-    settingsModal.querySelector(`.tab-pane[data-pane="${target}"]`).classList.add('active');
+// 2단 탭: 상위(분석팀/작성팀) × 하위(오케스트레이터/팀원/모델)
+let settingsTeam = 'analysis';
+let settingsSection = 'orchestrator';
+function applySettingsTabs() {
+  settingsModal.querySelectorAll('.team-tab').forEach(t => t.classList.toggle('active', t.dataset.team === settingsTeam));
+  settingsModal.querySelectorAll('.section-tab').forEach(t => t.classList.toggle('active', t.dataset.section === settingsSection));
+  settingsModal.querySelectorAll('.settings-pane').forEach(p => {
+    p.classList.toggle('active', p.dataset.team === settingsTeam && p.dataset.section === settingsSection);
   });
-});
+}
+settingsModal.querySelectorAll('.team-tab').forEach(t => t.addEventListener('click', () => { settingsTeam = t.dataset.team; applySettingsTabs(); }));
+settingsModal.querySelectorAll('.section-tab').forEach(t => t.addEventListener('click', () => { settingsSection = t.dataset.section; applySettingsTabs(); }));
 settingsModal.querySelectorAll('[data-reset]').forEach(btn => {
   btn.addEventListener('click', () => resetPromptField(btn.getAttribute('data-reset')));
 });
 async function savePrompts() {
   savePromptsBtn.disabled = true;
   try {
-    const body = {
-      analyst: promptAnalyst.value,
-      verifier: promptVerifier.value,
-      writer: promptWriter.value,
-      coreInsight: promptCoreInsight.value,
-      orchestrator: promptOrchestrator.value,
-    };
+    const body = {};
+    for (const [key, el] of Object.entries(PROMPT_FIELDS)) {
+      if (el) body[key] = el.value;
+    }
     const res = await fetch('/api/prompts', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -2236,7 +2230,7 @@ async function savePrompts() {
 }
 
 async function saveLlmConfig() {
-  saveLlmBtn.disabled = true;
+  if (saveLlmBtn) saveLlmBtn.disabled = true;
   savePromptsBtn.disabled = true;
   try {
     const body = {};
@@ -2263,30 +2257,26 @@ async function saveLlmConfig() {
   } catch (err) {
     flashLlmStatus(`네트워크 오류: ${err.message}`, true);
   } finally {
-    saveLlmBtn.disabled = false;
+    if (saveLlmBtn) saveLlmBtn.disabled = false;
     savePromptsBtn.disabled = false;
   }
 }
 
+// 하단 저장 버튼 하나로 프롬프트 + 모델 설정을 함께 저장
 savePromptsBtn.addEventListener('click', async () => {
-  const activeTab = settingsModal.querySelector('.tab.active')?.dataset.tab;
-  if (activeTab === 'llm') {
-    await saveLlmConfig();
-  } else {
-    await savePrompts();
-  }
+  await savePrompts();
+  await saveLlmConfig();
 });
 
-saveLlmBtn.addEventListener('click', saveLlmConfig);
-
-resetLlmBtn.addEventListener('click', async () => {
+// 모델 기본값 리셋 (각 모델 패널의 버튼)
+settingsModal.querySelectorAll('.reset-llm-btn').forEach(btn => btn.addEventListener('click', async () => {
   try {
     const res = await fetch('/api/llm-config/defaults');
     if (!res.ok) return;
     const json = await res.json();
     fillLlmRows(json);
   } catch { /* ignore */ }
-});
+}));
 
 // 로그인 상태 버튼들
 if (authBannerRefreshBtn) authBannerRefreshBtn.addEventListener('click', () => fetchAuthStatus(true));

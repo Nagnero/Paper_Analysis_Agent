@@ -165,97 +165,57 @@
         <h2>프롬프트 편집</h2>
         <button type="button" class="modal-close" data-close aria-label="닫기">×</button>
       </div>
-      <div class="modal-tabs">
-        <button type="button" class="tab active" data-tab="orchestrator">오케스트레이터</button>
-        <button type="button" class="tab" data-tab="team">분석팀</button>
-        <button type="button" class="tab" data-tab="writeTeam">작성팀</button>
-        <button type="button" class="tab" data-tab="llm">모델</button>
-        <button type="button" class="tab" data-tab="danger">위험 영역</button>
+      <div class="modal-tabs settings-team-tabs">
+        <button type="button" class="team-tab active" data-team="analysis">📊 분석팀</button>
+        <button type="button" class="team-tab" data-team="writing">✍️ 작성팀</button>
+      </div>
+      <div class="modal-tabs settings-section-tabs">
+        <button type="button" class="section-tab active" data-section="orchestrator">오케스트레이터</button>
+        <button type="button" class="section-tab" data-section="agents">팀원 에이전트</button>
+        <button type="button" class="section-tab" data-section="model">모델</button>
       </div>
       <div class="modal-body">
-        <div class="tab-pane active" data-pane="orchestrator">
+        <!-- 분석팀 · 오케스트레이터 -->
+        <div class="settings-pane active" data-team="analysis" data-section="orchestrator">
+          <p class="llm-hint">분석팀 오케스트레이터: 사용자의 강조사항을 해석해 분석 지시(directive)와 추가 감사 작업을 만듭니다.</p>
           <textarea id="promptOrchestrator" spellcheck="false"></textarea>
           <button type="button" class="btn-ghost small" data-reset="orchestrator">기본값으로 채우기 (저장 필요)</button>
         </div>
-        <div class="tab-pane" data-pane="team">
-          <p class="llm-hint">분석팀은 3단계로 동작합니다: 분석가가 claim을 추출 → 검증가가 원문 근거 확인 → 작가가 한국어 리포트 작성.</p>
+        <!-- 분석팀 · 팀원 에이전트 -->
+        <div class="settings-pane" data-team="analysis" data-section="agents">
+          <p class="llm-hint">분석가가 claim을 추출 → 검증가가 원문 근거 확인 → 작가가 한국어 리포트 작성. 핵심 분석은 표를 생성합니다.</p>
           <details class="team-agent" open>
             <summary>분석가 — claim과 재현가능성 정보 추출 (JSON)</summary>
             <div class="team-agent-body">
               <textarea id="promptAnalyst" spellcheck="false"></textarea>
-              <div class="team-agent-foot">
-                <button type="button" class="btn-ghost small" data-reset="analyst">기본값으로 채우기 (저장 필요)</button>
-              </div>
+              <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="analyst">기본값으로 채우기 (저장 필요)</button></div>
             </div>
           </details>
           <details class="team-agent">
             <summary>검증가 — claim별 원문 근거 검색 (JSON)</summary>
             <div class="team-agent-body">
               <textarea id="promptVerifier" spellcheck="false"></textarea>
-              <div class="team-agent-foot">
-                <button type="button" class="btn-ghost small" data-reset="verifier">기본값으로 채우기 (저장 필요)</button>
-              </div>
+              <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="verifier">기본값으로 채우기 (저장 필요)</button></div>
             </div>
           </details>
           <details class="team-agent">
             <summary>작가 — 한국어 리포트 작성 (Markdown)</summary>
             <div class="team-agent-body">
               <textarea id="promptWriter" spellcheck="false"></textarea>
-              <div class="team-agent-foot">
-                <button type="button" class="btn-ghost small" data-reset="writer">기본값으로 채우기 (저장 필요)</button>
-              </div>
+              <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="writer">기본값으로 채우기 (저장 필요)</button></div>
             </div>
           </details>
           <details class="team-agent">
             <summary>핵심 분석 — 표 전용 한국어 핵심 주장 생성 (JSON)</summary>
             <div class="team-agent-body">
               <textarea id="promptCoreInsight" spellcheck="false"></textarea>
-              <div class="team-agent-foot">
-                <button type="button" class="btn-ghost small" data-reset="coreInsight">기본값으로 채우기 (저장 필요)</button>
-              </div>
+              <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="coreInsight">기본값으로 채우기 (저장 필요)</button></div>
             </div>
           </details>
         </div>
-        <div class="tab-pane" data-pane="writeTeam">
-          <p class="llm-hint">논문 작성팀: 오케스트레이터가 지시를 분류해 본문/그림·표/인용 모듈로 보내고, 변경 후 컴파일 모듈이 항상 실행되어 오류를 자동 수정합니다. (STORM식 계획-우선 + self-reflection)</p>
-          <details class="team-agent" open>
-            <summary>작성 오케스트레이터 — 지시를 모듈로 분류 (JSON)</summary>
-            <div class="team-agent-body">
-              <textarea id="promptWriteOrchestrator" spellcheck="false"></textarea>
-              <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="writeOrchestrator">기본값으로 채우기 (저장 필요)</button></div>
-            </div>
-          </details>
-          <details class="team-agent">
-            <summary>본문 작성 — 텍스트 작성·수정 (LaTeX)</summary>
-            <div class="team-agent-body">
-              <textarea id="promptWriteBody" spellcheck="false"></textarea>
-              <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="writeBody">기본값으로 채우기 (저장 필요)</button></div>
-            </div>
-          </details>
-          <details class="team-agent">
-            <summary>그림·표 — tikz/표 생성·수정 (LaTeX)</summary>
-            <div class="team-agent-body">
-              <textarea id="promptWriteFigure" spellcheck="false"></textarea>
-              <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="writeFigure">기본값으로 채우기 (저장 필요)</button></div>
-            </div>
-          </details>
-          <details class="team-agent">
-            <summary>인용 — .bib 근거 인용 삽입 (LaTeX)</summary>
-            <div class="team-agent-body">
-              <textarea id="promptWriteCitation" spellcheck="false"></textarea>
-              <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="writeCitation">기본값으로 채우기 (저장 필요)</button></div>
-            </div>
-          </details>
-          <details class="team-agent">
-            <summary>컴파일 수정 — 컴파일 오류 자동 수정 (LaTeX)</summary>
-            <div class="team-agent-body">
-              <textarea id="promptWriteCompile" spellcheck="false"></textarea>
-              <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="writeCompile">기본값으로 채우기 (저장 필요)</button></div>
-            </div>
-          </details>
-        </div>
-        <div class="tab-pane" data-pane="llm">
-          <p class="llm-hint">각 에이전트별로 백엔드(Claude / Codex)·모델·추론 강도를 지정합니다. 모델은 가운데, 추론 강도는 오른쪽 드롭다운에서 고릅니다. 지원 강도는 모델마다 다릅니다(Opus 4.8: low~max, Sonnet 4.6: max까지·xhigh 없음, Haiku: 강도 미지원, Codex: low~xhigh).<br>채팅: 분석 후 사용자가 같은 논문에 대해 질문할 때 사용.</p>
+        <!-- 분석팀 · 모델 -->
+        <div class="settings-pane" data-team="analysis" data-section="model">
+          <p class="llm-hint">에이전트별 백엔드(Claude / Codex)·모델·추론 강도. 가운데가 모델, 오른쪽이 강도(모델마다 지원 범위 다름).</p>
           <div class="llm-row" data-role="orchestrator">
             <label>오케스트레이터</label>
             <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
@@ -292,7 +252,49 @@
             <select class="llm-model"></select>
             <select class="llm-reasoning"></select>
           </div>
-          <div class="llm-section-label">— 논문 작성팀 —</div>
+          <div class="llm-foot"><button type="button" class="reset-llm-btn btn-ghost small">모든 모델 기본값으로</button></div>
+        </div>
+        <!-- 작성팀 · 오케스트레이터 -->
+        <div class="settings-pane" data-team="writing" data-section="orchestrator">
+          <p class="llm-hint">작성팀 오케스트레이터: 지시를 본문/그림·표/인용 모듈로 분류하고 다듬습니다. (변경 후 컴파일 모듈이 항상 실행되어 오류 자동 수정)</p>
+          <textarea id="promptWriteOrchestrator" spellcheck="false"></textarea>
+          <button type="button" class="btn-ghost small" data-reset="writeOrchestrator">기본값으로 채우기 (저장 필요)</button>
+        </div>
+        <!-- 작성팀 · 팀원 에이전트 -->
+        <div class="settings-pane" data-team="writing" data-section="agents">
+          <p class="llm-hint">본문/그림·표/인용 모듈 + 항상 실행되는 컴파일 수정 모듈.</p>
+          <details class="team-agent" open>
+            <summary>본문 작성 — 텍스트 작성·수정 (LaTeX)</summary>
+            <div class="team-agent-body">
+              <textarea id="promptWriteBody" spellcheck="false"></textarea>
+              <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="writeBody">기본값으로 채우기 (저장 필요)</button></div>
+            </div>
+          </details>
+          <details class="team-agent">
+            <summary>그림·표 — tikz/표 생성·수정 (LaTeX)</summary>
+            <div class="team-agent-body">
+              <textarea id="promptWriteFigure" spellcheck="false"></textarea>
+              <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="writeFigure">기본값으로 채우기 (저장 필요)</button></div>
+            </div>
+          </details>
+          <details class="team-agent">
+            <summary>인용 — .bib 근거 인용 삽입 (LaTeX)</summary>
+            <div class="team-agent-body">
+              <textarea id="promptWriteCitation" spellcheck="false"></textarea>
+              <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="writeCitation">기본값으로 채우기 (저장 필요)</button></div>
+            </div>
+          </details>
+          <details class="team-agent">
+            <summary>컴파일 수정 — 컴파일 오류 자동 수정 (LaTeX)</summary>
+            <div class="team-agent-body">
+              <textarea id="promptWriteCompile" spellcheck="false"></textarea>
+              <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="writeCompile">기본값으로 채우기 (저장 필요)</button></div>
+            </div>
+          </details>
+        </div>
+        <!-- 작성팀 · 모델 -->
+        <div class="settings-pane" data-team="writing" data-section="model">
+          <p class="llm-hint">작성팀 에이전트별 백엔드·모델·추론 강도.</p>
           <div class="llm-row" data-role="writeOrchestrator">
             <label>작성 오케스트레이터</label>
             <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
@@ -323,18 +325,7 @@
             <select class="llm-model"></select>
             <select class="llm-reasoning"></select>
           </div>
-          <div class="llm-foot">
-            <button type="button" id="resetLlmBtn" class="btn-ghost small">모든 값을 기본값으로</button>
-            <button type="button" id="saveLlmBtn" class="primary">저장</button>
-            <span id="llmStatus" class="hint"></span>
-          </div>
-        </div>
-        <div class="tab-pane" data-pane="danger">
-          <div class="danger-zone">
-            <h3>위험 영역</h3>
-            <button type="button" id="libraryResetBtn" class="danger">라이브러리 전체 초기화</button>
-            <p class="hint-static">모든 폴더/논문/분석/채팅과 PDF 파일이 영구 삭제됩니다.</p>
-          </div>
+          <div class="llm-foot"><button type="button" class="reset-llm-btn btn-ghost small">모든 모델 기본값으로</button></div>
         </div>
       </div>
       <div class="modal-foot">
