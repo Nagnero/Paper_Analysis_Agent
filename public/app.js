@@ -706,6 +706,25 @@ if (pdfViewer) {
     setPdfSelection(selection);
     composerInput?.focus();
   });
+  // SyncTeX: LaTeX 모드에서 PDF 더블클릭 → 해당 .tex 줄로 이동
+  if (pdfViewer.onReverseSearch) pdfViewer.onReverseSearch((pt) => reverseToSource(pt));
+}
+
+async function reverseToSource({ page, x, y }) {
+  if (state.mode !== 'latex' || !state.currentProjectId) return;
+  try {
+    const q = `page=${page}&x=${x.toFixed(2)}&y=${y.toFixed(2)}`;
+    const res = await fetch(`/api/library/projects/${state.currentProjectId}/synctex?${q}`);
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || !j.found || !j.file) {
+      showToast(j.error || '소스 위치를 찾지 못했습니다 (synctex 데이터/도구 필요)');
+      return;
+    }
+    if (j.file !== state.currentLatexFile) await loadLatexFile(j.file);
+    if (latexEditor && latexEditor.gotoLine) latexEditor.gotoLine(j.line);
+  } catch (err) {
+    showToast('SyncTeX 오류: ' + err.message);
+  }
 }
 
 // claim 근거 클릭 → PDF에서 해당 인용문으로 점프 + 하이라이트

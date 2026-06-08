@@ -22,6 +22,7 @@ import { parsePdf } from './utils/parsePdf.js';
 import { buildCitationRefMap, citationRefsForText, stripInvalidCitationMarkers } from './public/citationContract.js';
 import * as latexProject from './core/latexProject.js';
 import { detectEngine, compileProject } from './core/latexCompiler.js';
+import { reverseLookup as synctexReverse } from './core/synctex.js';
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 const MAX_JSON_BODY_BYTES = 1 * 1024 * 1024;
@@ -1152,6 +1153,24 @@ async function handleProjectCompile(req, res, id) {
   }
 }
 
+async function handleProjectSynctex(req, res, id, params) {
+  try {
+    const project = await library.getProject(id);
+    if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+    const page = Number(params.get('page'));
+    const x = Number(params.get('x'));
+    const y = Number(params.get('y'));
+    if (!Number.isFinite(page) || !Number.isFinite(x) || !Number.isFinite(y)) {
+      return jsonResponse(res, 400, { error: 'page/x/y required' });
+    }
+    const hit = await synctexReverse(id, project.main_file, page, x, y);
+    if (!hit) return jsonResponse(res, 200, { found: false, error: 'SyncTeX 위치를 찾지 못했습니다 (synctex 도구/데이터 필요)' });
+    jsonResponse(res, 200, { found: true, file: hit.file, line: hit.line });
+  } catch (err) {
+    jsonResponse(res, 500, { error: err.message });
+  }
+}
+
 async function handleProjectPdf(req, res, id) {
   try {
     const project = await library.getProject(id);
@@ -1218,6 +1237,7 @@ function handleProjectsDispatch(req, res) {
   if (sub === '' && req.method === 'PATCH') return handleProjectUpdate(req, res, id);
   if (sub === '' && req.method === 'DELETE') return handleProjectDelete(req, res, id);
   if (sub === '/pdf' && req.method === 'GET') return handleProjectPdf(req, res, id);
+  if (sub === '/synctex' && req.method === 'GET') return handleProjectSynctex(req, res, id, u.searchParams);
   if (sub === '/compile' && req.method === 'POST') return handleProjectCompile(req, res, id);
   if (sub === '/file' && req.method === 'GET') return handleProjectFileGet(req, res, id, u.searchParams.get('path'));
   if (sub === '/file' && req.method === 'PUT') return handleProjectFilePut(req, res, id, u.searchParams.get('path'));

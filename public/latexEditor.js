@@ -105,6 +105,18 @@ export async function createLatexEditor(container) {
     getValue() { return editor.getValue(); },
     onChange(cb) { changeCb = cb; },
     onSave(cb) { saveCb = cb; },
+    gotoLine(line) {
+      const total = editor.getModel()?.getLineCount() || 1;
+      const ln = Math.max(1, Math.min(total, Number(line) | 0 || 1));
+      editor.revealLineInCenter(ln);
+      editor.setPosition({ lineNumber: ln, column: 1 });
+      editor.focus();
+      const ids = editor.deltaDecorations([], [{
+        range: new monaco.Range(ln, 1, ln, 1),
+        options: { isWholeLine: true, className: 'latex-jump-line' },
+      }]);
+      setTimeout(() => { try { editor.deltaDecorations(ids, []); } catch { /* ignore */ } }, 1600);
+    },
     layout() { editor.layout(); },
     focus() { editor.focus(); },
     setReadOnly(ro) { editor.updateOptions({ readOnly: !!ro }); },

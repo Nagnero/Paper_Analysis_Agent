@@ -1581,6 +1581,7 @@ button { font-family: inherit; }
 .latex-file.active { background: var(--surface-2); color: var(--accent); }
 .latex-file.readonly { color: var(--muted); cursor: default; }
 .latex-editor { flex: 1; min-width: 0; }
+.latex-jump-line { background: rgba(255, 213, 0, 0.22); }
 .latex-log {
   flex-shrink: 0; max-height: 38%; display: flex; flex-direction: column;
   border-top: 1px solid var(--border); background: #0b0c0f;
