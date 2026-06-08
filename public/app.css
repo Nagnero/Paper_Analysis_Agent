@@ -83,6 +83,7 @@ html, body {
   background: var(--bg);
   border-bottom: 1px solid transparent;
 }
+.workspace-tabs[hidden] { display: none; }
 .workspace-tab {
   border: 1px solid var(--border);
   background: var(--surface);

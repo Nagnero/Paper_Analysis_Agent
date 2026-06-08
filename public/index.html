@@ -12,7 +12,7 @@
     <aside id="sidebar">
       <div class="sidebar-header">
         <div class="sidebar-brand">📚 PAA</div>
-        <button type="button" id="newAnalysisBtn" class="sidebar-action primary">＋ 새 분석</button>
+        <button type="button" id="newAnalysisBtn" class="sidebar-action primary">＋ 새 작업</button>
       </div>
       <div class="sidebar-section-head">
         <span>라이브러리</span>
@@ -47,7 +47,7 @@
 
       <div id="workspace">
         <section id="chatPane">
-          <div class="workspace-tabs" role="tablist" aria-label="작업 영역">
+          <div id="workspaceTabsBar" class="workspace-tabs" role="tablist" aria-label="작업 영역" hidden>
             <button type="button" id="chatTabBtn" class="workspace-tab active" role="tab" aria-selected="true" aria-controls="chatMain" data-workspace-tab="chat">대화</button>
             <button type="button" id="analysisTabBtn" class="workspace-tab" role="tab" aria-selected="false" aria-controls="analysisPane" data-workspace-tab="analysis">핵심 분석</button>
           </div>

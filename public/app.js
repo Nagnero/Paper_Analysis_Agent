@@ -466,6 +466,7 @@ const chatMain = $('chatMain');
 const analysisPane = $('analysisPane');
 const analysisMatrixRoot = $('analysisMatrixRoot');
 const workspaceTabs = Array.from(document.querySelectorAll('.workspace-tab'));
+const workspaceTabsBar = $('workspaceTabsBar');
 // LaTeX 모드
 const latexPane = $('latexPane');
 const latexTitle = $('latexTitle');
@@ -1527,6 +1528,7 @@ function clearConversation() {
   autoGrow();
   setComposerHint('');
   newAnalysisBtn.classList.remove('highlight');
+  setWorkspaceTab('chat');
   updateSendState();
   renderSidebar();
 }
@@ -2194,6 +2196,8 @@ function saveFolderOpenState(map) {
 
 function renderSidebar() {
   renderLatexSidebar();
+  // 대화/핵심분석 탭은 논문 분석 컨텍스트(mode 'paper')에서만 노출
+  if (workspaceTabsBar) workspaceTabsBar.hidden = state.mode !== 'paper';
   const openState = loadFolderOpenState();
   libraryTreeEl.innerHTML = '';
   const tree = state.libraryTree || { folders: [], unfoldered: [] };
@@ -2380,6 +2384,7 @@ async function openPaper(paperId) {
       }
     }
     renderAnalysisMatrix();
+    setWorkspaceTab('chat');
     showPaperPdf(paper.id, paper.source_file || paper.title || '논문');
     updateComposerMode();
     updateSendState();
