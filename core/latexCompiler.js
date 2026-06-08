@@ -3,9 +3,11 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
 import { projectSrcDir, projectOutDir, projectMainPdf, ensureDir } from './fileManager.js';
 
 const IS_WIN = process.platform === 'win32';
+const EXE = IS_WIN ? '.exe' : '';
 
 // 선호 순서: tectonic(단일 바이너리·패키지 자동) → latexmk(풀 TeX) → pdflatex(폴백)
 const ENGINES = [
@@ -14,15 +16,36 @@ const ENGINES = [
   { engine: 'pdflatex', versionArgs: ['--version'] },
 ];
 
-let _cached; // {engine} | null | undefined
+let _cached; // {engine, cmd} | null | undefined
 
-function canRun(bin, args) {
+// 전체 경로면 셸 없이(공백/PATHEXT 무관), 맨 이름이면 win 에서 셸로(PATHEXT/.cmd 해석).
+function spawnShell(cmd) {
+  return path.isAbsolute(cmd) ? false : IS_WIN;
+}
+
+// GUI 앱은 셸 PATH 를 상속 못 받는 경우가 많아, PATH 외 흔한 위치도 탐색.
+function fallbackDirs() {
+  const home = os.homedir();
+  return [
+    home,
+    path.join(home, 'Downloads'),
+    path.join(home, 'Desktop'),
+    path.join(home, '.local', 'bin'),
+    path.join(home, 'bin'),
+    path.join(home, '.cargo', 'bin'),
+    '/usr/local/bin',
+    '/opt/homebrew/bin',
+    'C:\\tectonic',
+  ];
+}
+
+function canRun(cmd, args) {
   return new Promise((resolve) => {
     let done = false;
     let proc;
     const finish = (ok) => { if (!done) { done = true; resolve(ok); } };
     try {
-      proc = spawn(bin, args, { shell: IS_WIN, stdio: 'ignore' });
+      proc = spawn(cmd, args, { shell: spawnShell(cmd), stdio: 'ignore' });
     } catch { return finish(false); }
     const killer = setTimeout(() => { try { proc.kill(); } catch { /* ignore */ } finish(false); }, 8000);
     proc.on('error', () => { clearTimeout(killer); finish(false); });
@@ -30,11 +53,32 @@ function canRun(bin, args) {
   });
 }
 
-/** 사용 가능한 첫 엔진을 캐시해 반환. 없으면 null. */
+// PATH → 흔한 위치 순으로 실행 가능한 cmd(이름 또는 전체경로)를 찾음.
+async function resolveCmd(engine, versionArgs) {
+  if (await canRun(engine, versionArgs)) return engine; // PATH
+  for (const dir of fallbackDirs()) {
+    const cand = path.join(dir, engine + EXE);
+    try { await fs.stat(cand); } catch { continue; }
+    if (await canRun(cand, versionArgs)) return cand;
+  }
+  return null;
+}
+
+/** 사용 가능한 첫 엔진을 캐시해 반환. {engine, cmd} 또는 null. */
 export async function detectEngine(force = false) {
   if (_cached !== undefined && !force) return _cached;
+
+  // 환경변수 직접 지정(전체 경로) 최우선. 파일명으로 엔진 종류 추론.
+  const override = process.env.PAA_LATEX_ENGINE;
+  if (override) {
+    const base = path.basename(override).replace(/\.exe$/i, '').toLowerCase();
+    const known = ENGINES.find(e => e.engine === base) || ENGINES[0];
+    if (await canRun(override, known.versionArgs)) { _cached = { engine: known.engine, cmd: override }; return _cached; }
+  }
+
   for (const e of ENGINES) {
-    if (await canRun(e.engine, e.versionArgs)) { _cached = { engine: e.engine }; return _cached; }
+    const cmd = await resolveCmd(e.engine, e.versionArgs);
+    if (cmd) { _cached = { engine: e.engine, cmd }; return _cached; }
   }
   _cached = null;
   return null;
@@ -56,11 +100,11 @@ function buildRuns(engine, main) {
   }
 }
 
-function runOnce(bin, args, cwd, timeoutMs) {
+function runOnce(cmd, args, cwd, timeoutMs) {
   return new Promise((resolve, reject) => {
     let proc;
     try {
-      proc = spawn(bin, args, { shell: IS_WIN, cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+      proc = spawn(cmd, args, { shell: spawnShell(cmd), cwd, stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (e) { return reject(e); }
     proc.stdout.setEncoding('utf8');
     proc.stderr.setEncoding('utf8');
@@ -96,7 +140,7 @@ export async function compileProject(projectId, mainFile, { timeoutMs = 120_000 
   let log = '';
   let lastCode = 0;
   for (const args of buildRuns(det.engine, main)) {
-    const r = await runOnce(det.engine, args, srcDir, timeoutMs);
+    const r = await runOnce(det.cmd, args, srcDir, timeoutMs);
     log += `$ ${det.engine} ${args.join(' ')}\n${r.output}\n`;
     lastCode = r.code;
     if (r.timedOut) { log += `\n[타임아웃 ${timeoutMs}ms — 중단]\n`; break; }
