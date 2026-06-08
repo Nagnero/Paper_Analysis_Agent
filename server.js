@@ -1153,6 +1153,23 @@ async function handleProjectCompile(req, res, id) {
   }
 }
 
+async function handleProjectZip(req, res, id) {
+  try {
+    const project = await library.getProject(id);
+    if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+    const buf = await latexProject.zipProject(id);
+    const safeName = (project.name || `project-${id}`).replace(/[^\w.\-]+/g, '_');
+    res.writeHead(200, {
+      'Content-Type': 'application/zip',
+      'Content-Length': buf.length,
+      'Content-Disposition': `attachment; filename="${safeName}.zip"`,
+    });
+    res.end(buf);
+  } catch (err) {
+    jsonResponse(res, 500, { error: err.message });
+  }
+}
+
 async function handleProjectSynctex(req, res, id, params) {
   try {
     const project = await library.getProject(id);
@@ -1237,6 +1254,7 @@ function handleProjectsDispatch(req, res) {
   if (sub === '' && req.method === 'PATCH') return handleProjectUpdate(req, res, id);
   if (sub === '' && req.method === 'DELETE') return handleProjectDelete(req, res, id);
   if (sub === '/pdf' && req.method === 'GET') return handleProjectPdf(req, res, id);
+  if (sub === '/zip' && req.method === 'GET') return handleProjectZip(req, res, id);
   if (sub === '/synctex' && req.method === 'GET') return handleProjectSynctex(req, res, id, u.searchParams);
   if (sub === '/compile' && req.method === 'POST') return handleProjectCompile(req, res, id);
   if (sub === '/file' && req.method === 'GET') return handleProjectFileGet(req, res, id, u.searchParams.get('path'));

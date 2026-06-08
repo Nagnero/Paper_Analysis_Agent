@@ -473,6 +473,7 @@ const latexTitle = $('latexTitle');
 const latexSaveState = $('latexSaveState');
 const latexCompileStatus = $('latexCompileStatus');
 const latexCompileBtn = $('latexCompileBtn');
+const latexZipBtn = $('latexZipBtn');
 const latexLogBtn = $('latexLogBtn');
 const latexEngineBanner = $('latexEngineBanner');
 const latexFileTree = $('latexFileTree');
@@ -2102,6 +2103,15 @@ if (zipInput) zipInput.addEventListener('change', () => {
   zipInput.value = '';
 });
 if (latexCompileBtn) latexCompileBtn.addEventListener('click', compileLatex);
+if (latexZipBtn) latexZipBtn.addEventListener('click', () => {
+  if (!state.currentProjectId) return;
+  const a = document.createElement('a');
+  a.href = `/api/library/projects/${state.currentProjectId}/zip`;
+  a.download = ((latexTitle && latexTitle.textContent) || 'project') + '.zip';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+});
 if (latexLogBtn) latexLogBtn.addEventListener('click', () => { if (latexLog) latexLog.hidden = !latexLog.hidden; });
 if (latexLogClose) latexLogClose.addEventListener('click', () => { if (latexLog) latexLog.hidden = true; });
 if (latexCompileStatus) latexCompileStatus.addEventListener('click', () => {

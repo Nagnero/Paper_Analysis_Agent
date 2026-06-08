@@ -2,7 +2,7 @@
 // LaTeX 프로젝트 ZIP 해제 + 소스 파일 read/write (경로 탐색 차단).
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { unzipSync } from 'fflate';
+import { unzipSync, zipSync } from 'fflate';
 import { projectSrcDir, ensureDir } from './fileManager.js';
 
 const MAX_FILES = 3000;
@@ -157,4 +157,32 @@ export async function writeProjectFile(projectId, relPath, content) {
   const abs = resolveInSrc(projectId, relPath);
   await ensureDir(path.dirname(abs));
   await fs.writeFile(abs, String(content ?? ''), 'utf8');
+}
+
+// zip 다운로드용: 소스 + 결과 PDF 포함, 중간 산출물(.aux/.log/.synctex.gz 등)은 제외.
+const ZIP_SKIP_EXT = new Set([
+  '.aux', '.log', '.out', '.blg', '.fls', '.fdb_latexmk', '.toc', '.lof', '.lot',
+  '.nav', '.snm', '.vrb', '.xdv', '.dvi', '.idx', '.ind', '.ilg', '.bcf',
+]);
+function skipForZip(rel) {
+  const l = rel.toLowerCase();
+  if (l.endsWith('.synctex.gz') || l.endsWith('.run.xml')) return true;
+  return ZIP_SKIP_EXT.has(path.extname(l));
+}
+
+export async function zipProject(projectId) {
+  const srcDir = projectSrcDir(projectId);
+  const entries = {};
+  async function walk(absDir, relDir) {
+    let list;
+    try { list = await fs.readdir(absDir, { withFileTypes: true }); } catch { return; }
+    for (const e of list) {
+      const rel = relDir ? `${relDir}/${e.name}` : e.name;
+      if (e.isDirectory()) { await walk(path.join(absDir, e.name), rel); continue; }
+      if (skipForZip(rel)) continue;
+      entries[rel] = new Uint8Array(await fs.readFile(path.join(absDir, e.name)));
+    }
+  }
+  await walk(srcDir, '');
+  return Buffer.from(zipSync(entries));
 }
