@@ -424,6 +424,7 @@ const state = {
   latexProjects: [],
   latexDirty: false,
   latexBusy: false,
+  latexEngine: null,
 };
 
 let authStatus = null;
@@ -1674,6 +1675,7 @@ async function refreshLatexEngineBanner() {
   try {
     const res = await fetch('/api/latex-status');
     const j = await res.json();
+    state.latexEngine = j.engine || null;
     if (j.engine) {
       latexEngineBanner.hidden = true;
       if (latexCompileBtn) { latexCompileBtn.disabled = false; latexCompileBtn.title = `엔진: ${j.engine}`; }
@@ -1744,6 +1746,12 @@ async function uploadLatexZip(file) {
     if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
     await refreshLatexProjects();
     await openLatexProject(j.project.id);
+    // 엔진이 있으면 채팅 없이 바로 컴파일
+    if (state.latexEngine) {
+      await compileLatex();
+    } else {
+      showToast('프로젝트 생성됨 — LaTeX 컴파일러를 설치하면 컴파일할 수 있어요');
+    }
   } catch (err) {
     showToast('업로드 실패: ' + err.message);
   }
@@ -1761,13 +1769,6 @@ async function refreshLatexProjects() {
 function renderLatexSidebar() {
   if (!latexTreeEl) return;
   latexTreeEl.innerHTML = '';
-  if (!state.latexProjects.length) {
-    const empty = document.createElement('div');
-    empty.className = 'latex-empty';
-    empty.textContent = 'ZIP 을 끌어다 놓거나 ＋';
-    latexTreeEl.appendChild(empty);
-    return;
-  }
   for (const p of state.latexProjects) latexTreeEl.appendChild(buildProjectItem(p));
 }
 
@@ -1970,9 +1971,11 @@ function applyAuthStatus() {
 
 attachZone.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', () => {
-  if (fileInput.files && fileInput.files[0]) {
-    setAttachment(fileInput.files[0]);
-  }
+  const f = fileInput.files && fileInput.files[0];
+  if (!f) return;
+  if (isZip(f)) uploadLatexZip(f);   // zip → 바로 컴파일 프로젝트
+  else setAttachment(f);             // pdf → 분석
+  fileInput.value = '';
 });
 attachClear.addEventListener('click', () => {
   clearAttachment();

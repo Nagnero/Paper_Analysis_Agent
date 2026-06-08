@@ -65,8 +65,8 @@
           <div class="hint-row"><span id="composerHint" class="hint"></span></div>
           <button type="button" id="attachZone" class="attach-zone">
             <span class="attach-zone-icon" aria-hidden="true">📄</span>
-            <span class="attach-zone-title">PDF 첨부하여 분석 시작</span>
-            <span class="attach-zone-sub">클릭하여 선택하거나 파일을 끌어다 놓으세요</span>
+            <span class="attach-zone-title">PDF 분석 · LaTeX ZIP 컴파일</span>
+            <span class="attach-zone-sub">PDF나 .zip을 끌어다 놓거나 클릭하여 선택 — PDF는 분석, ZIP은 바로 컴파일</span>
           </button>
           <div id="attachmentChip" class="attach-chip" hidden>
             <span class="chip-icon">📄</span>
@@ -83,7 +83,7 @@
           <div id="composerRow" class="composer-row">
             <textarea id="composerInput" class="composer-input" rows="1" placeholder="후속 질문을 입력하세요..."></textarea>
             <button type="button" id="sendBtn" class="send-btn" title="보내기" disabled>↑</button>
-            <input id="fileInput" type="file" accept="application/pdf,.pdf" hidden>
+            <input id="fileInput" type="file" accept="application/pdf,.pdf,.zip,application/zip,application/x-zip-compressed" hidden>
           </div>
         </div>
       </footer>
