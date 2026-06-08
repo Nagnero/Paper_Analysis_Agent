@@ -1596,5 +1596,33 @@ button { font-family: inherit; }
   margin: 0; padding: 8px 12px; overflow: auto; font-family: ui-monospace, Menlo, Consolas, monospace;
   font-size: 11.5px; color: #c8ccd4; white-space: pre-wrap; word-break: break-word;
 }
+/* LaTeX 편집 채팅 */
+.latex-chat {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+  background: #15171c;
+}
+.latex-chat-log {
+  max-height: 140px;
+  overflow-y: auto;
+  padding: 6px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.latex-chat-log:empty { display: none; }
+.latex-chat-msg { font-size: 12px; line-height: 1.4; padding: 4px 8px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
+.latex-chat-msg.user { background: var(--surface-2); color: var(--text); align-self: flex-end; max-width: 90%; }
+.latex-chat-msg.ai { background: rgba(79, 158, 255, 0.1); color: #cfe2ff; align-self: flex-start; max-width: 95%; }
+.latex-chat-msg.ai.error { background: rgba(255, 80, 80, 0.12); color: #ff8585; }
+.latex-chat-input { display: flex; gap: 6px; padding: 8px 10px; }
+.latex-chat-input input {
+  flex: 1; min-width: 0; background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; font: inherit; font-size: 12.5px; outline: none;
+}
+.latex-chat-input input:focus { border-color: var(--accent); }
+
 /* 사이드바 LaTeX 섹션 — 라이브러리와 공간을 반반 분할 */
 .latex-tree { flex: 1 1 0; min-height: 0; }

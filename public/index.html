@@ -107,6 +107,13 @@
             <div class="latex-log-head"><span>컴파일 로그</span><button type="button" id="latexLogClose" class="latex-log-close" aria-label="로그 닫기">×</button></div>
             <pre id="latexLogBody" class="latex-log-body"></pre>
           </div>
+          <div id="latexChat" class="latex-chat">
+            <div id="latexChatLog" class="latex-chat-log"></div>
+            <div class="latex-chat-input">
+              <input id="latexChatInput" type="text" placeholder="AI에게 현재 파일 수정 지시 (예: introduction을 더 간결하게)" />
+              <button type="button" id="latexChatSend" class="latex-btn primary" title="보내기">↑</button>
+            </div>
+          </div>
         </section>
         <div id="paneResizer" class="pane-resizer" hidden></div>
         <aside id="pdfPane" class="pdf-pane" hidden>

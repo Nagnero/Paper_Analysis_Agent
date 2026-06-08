@@ -425,6 +425,7 @@ const state = {
   latexDirty: false,
   latexBusy: false,
   latexEngine: null,
+  latexChatBusy: false,
 };
 
 let authStatus = null;
@@ -484,6 +485,9 @@ const latexLogClose = $('latexLogClose');
 const latexTreeEl = $('latexTree');
 const newLatexBtn = $('newLatexBtn');
 const zipInput = $('zipInput');
+const latexChatLog = $('latexChatLog');
+const latexChatInput = $('latexChatInput');
+const latexChatSend = $('latexChatSend');
 const chatMainEl = document.querySelector('.chat-main');
 const settingsModal = $('settingsModal');
 const savePromptsBtn = $('savePromptsBtn');
@@ -1770,6 +1774,49 @@ function showLatexLog(text) {
   if (latexLogBody) latexLogBody.textContent = text || '';
 }
 
+// AI 편집 채팅: 현재 파일 + 지시 → 수정된 파일 적용 + 재컴파일
+function appendLatexChat(role, text) {
+  if (!latexChatLog) return null;
+  const el = document.createElement('div');
+  el.className = 'latex-chat-msg ' + role;
+  el.textContent = (role === 'user' ? '🧑 ' : '🤖 ') + text;
+  latexChatLog.appendChild(el);
+  latexChatLog.scrollTop = latexChatLog.scrollHeight;
+  return el;
+}
+
+async function sendLatexChat() {
+  const instruction = (latexChatInput && latexChatInput.value || '').trim();
+  if (!instruction || state.latexChatBusy) return;
+  if (!state.currentProjectId || !state.currentLatexFile) { showToast('편집할 파일을 먼저 여세요'); return; }
+  state.latexChatBusy = true;
+  if (latexChatSend) latexChatSend.disabled = true;
+  appendLatexChat('user', instruction);
+  latexChatInput.value = '';
+  const pending = appendLatexChat('ai', '수정 중…');
+  try {
+    if (state.latexDirty) await saveCurrentLatexFile(); // 현재 편집분 먼저 저장
+    const res = await fetch(`/api/library/projects/${state.currentProjectId}/chat-edit`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file: state.currentLatexFile, instruction }),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || !j.ok) throw new Error(j.error || `HTTP ${res.status}`);
+    if (pending) pending.textContent = '🤖 ' + (j.note || '수정 완료');
+    if (latexEditor && typeof j.content === 'string') {
+      latexEditor.setContent(state.currentLatexFile, j.content);
+      state.latexDirty = false;
+      updateLatexSaveState();
+    }
+    await compileLatex(); // 결과 바로 반영
+  } catch (err) {
+    if (pending) { pending.textContent = '🤖 실패: ' + err.message; pending.classList.add('error'); }
+  } finally {
+    state.latexChatBusy = false;
+    if (latexChatSend) latexChatSend.disabled = false;
+  }
+}
+
 // 컴파일 결과 PDF 를 우측 패널(PDF.js)에 로드. 컴파일 전이면 빈 상태로 패널만 연다.
 function showProjectPdf(projectId, hasPdf = true) {
   if (!pdfViewer) return;
@@ -2103,6 +2150,10 @@ if (zipInput) zipInput.addEventListener('change', () => {
   zipInput.value = '';
 });
 if (latexCompileBtn) latexCompileBtn.addEventListener('click', compileLatex);
+if (latexChatSend) latexChatSend.addEventListener('click', sendLatexChat);
+if (latexChatInput) latexChatInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendLatexChat(); }
+});
 if (latexZipBtn) latexZipBtn.addEventListener('click', () => {
   if (!state.currentProjectId) return;
   const a = document.createElement('a');

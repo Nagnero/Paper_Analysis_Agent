@@ -23,6 +23,7 @@ import { buildCitationRefMap, citationRefsForText, stripInvalidCitationMarkers }
 import * as latexProject from './core/latexProject.js';
 import { detectEngine, compileProject } from './core/latexCompiler.js';
 import { reverseLookup as synctexReverse } from './core/synctex.js';
+import { editLatex } from './agents/latexEditor.js';
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 const MAX_JSON_BODY_BYTES = 1 * 1024 * 1024;
@@ -1153,6 +1154,38 @@ async function handleProjectCompile(req, res, id) {
   }
 }
 
+async function handleProjectChatEdit(req, res, id) {
+  try {
+    const project = await library.getProject(id);
+    if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+    const body = await readJsonBody(req, { maxBytes: MAX_TEX_BODY_BYTES });
+    const file = typeof body.file === 'string' ? body.file : project.main_file;
+    const instruction = typeof body.instruction === 'string' ? body.instruction.trim() : '';
+    if (!instruction) return jsonResponse(res, 400, { error: 'instruction required' });
+    if (instruction.length > 8000) return jsonResponse(res, 413, { error: '지시가 너무 깁니다 (최대 8000자).' });
+
+    // 인증 게이트 (분석 채팅과 동일하게 chat 역할 사용)
+    const auth = await authStatus.checkAll();
+    llmConfig.applyAvailability(auth);
+    const llm = llmConfig.getRole('chat');
+    const entry = auth[llm.backend];
+    if (!entry || !entry.loggedIn) {
+      return jsonResponse(res, 401, { error: `${llm.backend}에 로그인이 필요합니다. 설정에서 다른 백엔드로 바꾸거나 로그인하세요.` });
+    }
+
+    let content;
+    try { content = await latexProject.readProjectFile(id, file); }
+    catch (err) { return jsonResponse(res, 400, { error: `파일 읽기 실패: ${err.message}` }); }
+
+    const result = await editLatex({ fileName: file, content, instruction, llm });
+    await latexProject.writeProjectFile(id, file, result.content);
+    await library.touchProject(id).catch(() => {});
+    jsonResponse(res, 200, { ok: true, file, content: result.content, note: result.note });
+  } catch (err) {
+    jsonResponse(res, 500, { error: err.message });
+  }
+}
+
 async function handleProjectZip(req, res, id) {
   try {
     const project = await library.getProject(id);
@@ -1246,7 +1279,7 @@ function handleProjectsDispatch(req, res) {
     if (req.method === 'POST') return handleProjectCreate(req, res);
     res.writeHead(405); res.end(); return;
   }
-  const m = rest.match(/^\/(\d+)(\/[a-z]+)?$/);
+  const m = rest.match(/^\/(\d+)(\/[a-z-]+)?$/);
   if (!m) { res.writeHead(404); res.end(); return; }
   const id = Number(m[1]);
   const sub = m[2] || '';
@@ -1257,6 +1290,7 @@ function handleProjectsDispatch(req, res) {
   if (sub === '/zip' && req.method === 'GET') return handleProjectZip(req, res, id);
   if (sub === '/synctex' && req.method === 'GET') return handleProjectSynctex(req, res, id, u.searchParams);
   if (sub === '/compile' && req.method === 'POST') return handleProjectCompile(req, res, id);
+  if (sub === '/chat-edit' && req.method === 'POST') return handleProjectChatEdit(req, res, id);
   if (sub === '/file' && req.method === 'GET') return handleProjectFileGet(req, res, id, u.searchParams.get('path'));
   if (sub === '/file' && req.method === 'PUT') return handleProjectFilePut(req, res, id, u.searchParams.get('path'));
   res.writeHead(405); res.end();
