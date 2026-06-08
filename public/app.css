@@ -1623,6 +1623,8 @@ button { font-family: inherit; }
 .latex-chat-msg.user { background: var(--surface-2); color: var(--text); align-self: flex-end; max-width: 90%; }
 .latex-chat-msg.ai { background: rgba(79, 158, 255, 0.1); color: #cfe2ff; align-self: flex-start; max-width: 95%; }
 .latex-chat-msg.ai.error { background: rgba(255, 80, 80, 0.12); color: #ff8585; }
+.latex-chat-msg.working { animation: latexChatPulse 1.2s ease-in-out infinite; }
+@keyframes latexChatPulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
 .latex-chat-input { display: flex; gap: 6px; padding: 8px 10px; }
 .latex-chat-input input {
   flex: 1; min-width: 0; background: var(--bg); color: var(--text);

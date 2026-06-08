@@ -1159,33 +1159,42 @@ async function handleProjectCompile(req, res, id) {
 }
 
 async function handleProjectChatEdit(req, res, id) {
+  // 검증/인증은 SSE 시작 전에 (정상 HTTP 상태로 에러 반환)
+  const project = await library.getProject(id);
+  if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+  let body;
+  try { body = await readJsonBody(req, { maxBytes: MAX_TEX_BODY_BYTES }); }
+  catch (err) { return jsonResponse(res, 400, { error: err.message }); }
+  const file = typeof body.file === 'string' ? body.file : project.main_file;
+  const instruction = typeof body.instruction === 'string' ? body.instruction.trim() : '';
+  if (!instruction) return jsonResponse(res, 400, { error: 'instruction required' });
+  if (instruction.length > 8000) return jsonResponse(res, 413, { error: '지시가 너무 깁니다 (최대 8000자).' });
+
+  // 인증 게이트: 작성팀 오케스트레이터 역할의 백엔드 기준
+  const auth = await authStatus.checkAll();
+  llmConfig.applyAvailability(auth);
+  const llm = llmConfig.getRole('writeOrchestrator');
+  const entry = auth[llm.backend];
+  if (!entry || !entry.loggedIn) {
+    return jsonResponse(res, 401, { error: `${llm.backend}에 로그인이 필요합니다. 설정에서 다른 백엔드로 바꾸거나 로그인하세요.` });
+  }
+
+  // 단계별 진행을 SSE 로 스트리밍
+  startSse(res);
   try {
-    const project = await library.getProject(id);
-    if (!project) return jsonResponse(res, 404, { error: 'project not found' });
-    const body = await readJsonBody(req, { maxBytes: MAX_TEX_BODY_BYTES });
-    const file = typeof body.file === 'string' ? body.file : project.main_file;
-    const instruction = typeof body.instruction === 'string' ? body.instruction.trim() : '';
-    if (!instruction) return jsonResponse(res, 400, { error: 'instruction required' });
-    if (instruction.length > 8000) return jsonResponse(res, 413, { error: '지시가 너무 깁니다 (최대 8000자).' });
-
-    // 인증 게이트: 작성팀 오케스트레이터 역할의 백엔드 기준
-    const auth = await authStatus.checkAll();
-    llmConfig.applyAvailability(auth);
-    const llm = llmConfig.getRole('writeOrchestrator');
-    const entry = auth[llm.backend];
-    if (!entry || !entry.loggedIn) {
-      return jsonResponse(res, 401, { error: `${llm.backend}에 로그인이 필요합니다. 설정에서 다른 백엔드로 바꾸거나 로그인하세요.` });
-    }
-
-    // 오케스트레이터 → 모듈 → 컴파일 게이트
-    const result = await runPaperWriting({ projectId: id, file, mainFile: project.main_file, instruction });
+    const result = await runPaperWriting({
+      projectId: id, file, mainFile: project.main_file, instruction,
+      onStep: (ev) => sseWrite(res, ev),
+    });
     await library.touchProject(id).catch(() => {});
-    jsonResponse(res, 200, {
-      ok: true, file: result.file, content: result.content, note: result.note,
+    sseWrite(res, {
+      stage: 'done', ok: true, file: result.file, content: result.content, note: result.note,
       module: result.module, compiled: result.compiled, fixes: result.fixes, log: result.log,
     });
   } catch (err) {
-    jsonResponse(res, 500, { error: err.message });
+    sseWrite(res, { stage: 'error', error: err.message });
+  } finally {
+    res.end();
   }
 }
 

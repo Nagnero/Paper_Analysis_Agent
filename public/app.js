@@ -1802,30 +1802,54 @@ async function sendLatexChat() {
   if (latexChatSend) latexChatSend.disabled = true;
   appendLatexChat('user', instruction);
   latexChatInput.value = '';
-  const pending = appendLatexChat('ai', '수정 중…');
+  const pending = appendLatexChat('ai', '🧭 시작…');
+  pending.classList.add('working');
   try {
     if (state.latexDirty) await saveCurrentLatexFile(); // 현재 편집분 먼저 저장
     const res = await fetch(`/api/library/projects/${state.currentProjectId}/chat-edit`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ file: state.currentLatexFile, instruction }),
     });
-    const j = await res.json().catch(() => ({}));
-    if (!res.ok || !j.ok) throw new Error(j.error || `HTTP ${res.status}`);
-    const moduleLabel = { writing: '✍️ 본문', figure: '📊 그림/표', citation: '📚 인용' }[j.module] || '';
-    if (pending) pending.textContent = `🤖 ${moduleLabel ? '[' + moduleLabel + '] ' : ''}${j.note || '수정 완료'}`;
-    // 편집한 파일이 현재 열린 파일이면 에디터에 반영
-    if (latexEditor && typeof j.content === 'string' && j.file === state.currentLatexFile) {
-      latexEditor.setContent(state.currentLatexFile, j.content);
+    if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.error || `HTTP ${res.status}`); }
+
+    // SSE 스트림 소비 — 단계(분류→계획→작성→검토→컴파일)를 실시간 표시
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+    let final = null;
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf('\n\n')) !== -1) {
+        const raw = buffer.slice(0, idx); buffer = buffer.slice(idx + 2);
+        const lines = raw.split('\n').filter(l => l.startsWith('data:')).map(l => l.slice(5).trimStart());
+        if (!lines.length) continue;
+        let ev; try { ev = JSON.parse(lines.join('\n')); } catch { continue; }
+        if (ev.stage === 'done') final = ev;
+        else if (ev.stage === 'error') throw new Error(ev.error || '오류');
+        else if (ev.label) { pending.textContent = ev.label; latexChatLog.scrollTop = latexChatLog.scrollHeight; }
+      }
+    }
+    if (!final) throw new Error('응답이 비었습니다');
+
+    pending.classList.remove('working');
+    const moduleLabel = { writing: '✍️ 본문', figure: '📊 그림/표', citation: '📚 인용' }[final.module] || '';
+    pending.textContent = `🤖 ${moduleLabel ? '[' + moduleLabel + '] ' : ''}${final.note || '수정 완료'}`;
+    if (latexEditor && typeof final.content === 'string' && final.file === state.currentLatexFile) {
+      latexEditor.setContent(state.currentLatexFile, final.content);
       state.latexDirty = false;
       updateLatexSaveState();
     }
-    // 서버가 이미 컴파일(+에러수정 루프)했으므로 결과 PDF만 다시 로드
-    showLatexLog(j.log || '');
-    setLatexCompileStatus(j.compiled ? 'ok' : 'fail');
-    showProjectPdf(state.currentProjectId, !!j.compiled);
-    if (!j.compiled && latexLog) latexLog.hidden = false;
+    showLatexLog(final.log || '');
+    setLatexCompileStatus(final.compiled ? 'ok' : 'fail');
+    showProjectPdf(state.currentProjectId, !!final.compiled);
+    if (!final.compiled && latexLog) latexLog.hidden = false;
   } catch (err) {
-    if (pending) { pending.textContent = '🤖 실패: ' + err.message; pending.classList.add('error'); }
+    pending.classList.remove('working');
+    pending.textContent = '🤖 실패: ' + err.message;
+    pending.classList.add('error');
   } finally {
     state.latexChatBusy = false;
     if (latexChatSend) latexChatSend.disabled = false;

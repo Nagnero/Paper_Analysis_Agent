@@ -70,10 +70,13 @@ async function planStep(moduleType, fileName, content, instruction) {
 }
 
 // 본문/그림 모듈: 계획 → 작성 → 검토 (멀티에이전트, STORM식)
-async function multiAgentEdit({ module, fileName, content, instruction }) {
+async function multiAgentEdit({ module, fileName, content, instruction, onStep }) {
   const sel = MODULE_MAP[module];
+  onStep({ stage: 'plan', label: '🗺️ 계획 수립 중…' });
   const plan = await planStep(sel.type, fileName, content, instruction);
+  onStep({ stage: 'write', label: `✍️ ${sel.type} 작성 중…` });
   const draft = await runModule(sel.prompt, sel.role, { fileName, content, instruction, plan });
+  onStep({ stage: 'review', label: '🔍 검토 중…' });
   const reviewed = await runModule('writeReview', 'writeReview', { fileName, content: draft.content, instruction, plan });
   return { content: reviewed.content, note: `[계획→작성→검토] ${reviewed.note}` };
 }
@@ -82,13 +85,14 @@ async function multiAgentEdit({ module, fileName, content, instruction }) {
  * @param {{ projectId:number, file:string, mainFile:string, instruction:string }} args
  * @returns {Promise<{module:string, note:string, content:string, file:string, compiled:boolean, fixes:number, log:string}>}
  */
-export async function runPaperWriting({ projectId, file, mainFile, instruction }) {
+export async function runPaperWriting({ projectId, file, mainFile, instruction, onStep = () => {} }) {
   const content = await latexProject.readProjectFile(projectId, file);
   if (content.length > MAX_CHARS) throw new Error(`파일이 너무 큽니다(${content.length}자, 최대 ${MAX_CHARS}).`);
 
   // 1) 오케스트레이터: 모듈 분류 + 지시 다듬기
   let module = 'writing';
   let refined = instruction;
+  onStep({ stage: 'orchestrate', label: '🧭 지시 분석·모듈 분류 중…' });
   try {
     const prompts = await getPrompts();
     const orchRole = llmConfig.getRole('writeOrchestrator');
@@ -100,22 +104,28 @@ export async function runPaperWriting({ projectId, file, mainFile, instruction }
     if (typeof j.refinedInstruction === 'string' && j.refinedInstruction.trim()) refined = j.refinedInstruction.trim();
   } catch { /* 분류 실패 → writing + 원지시 */ }
 
+  const moduleLabel = { writing: '✍️ 본문', figure: '📊 그림/표', citation: '📚 인용' }[module] || module;
+  onStep({ stage: 'route', label: `🧭 ${moduleLabel} 모듈로 처리`, module });
+
   // 2) 모듈 실행 — 본문/그림은 멀티에이전트(계획→작성→검토), 인용은 단일
   let edit;
   if (module === 'citation') {
+    onStep({ stage: 'citation', label: '📚 인용 채우는 중…' });
     const bibKeys = (await collectBibKeys(projectId)).join(', ') || '(없음)';
     edit = await runModule('writeCitation', 'writeCitation', { fileName: file, content, instruction: refined, bibKeys });
   } else {
-    edit = await multiAgentEdit({ module, fileName: file, content, instruction: refined });
+    edit = await multiAgentEdit({ module, fileName: file, content, instruction: refined, onStep });
   }
   await latexProject.writeProjectFile(projectId, file, edit.content);
 
   // 3) 컴파일 게이트 + 에러 수정 루프
+  onStep({ stage: 'compile', label: '🔧 컴파일 중…' });
   let compile = await compileProject(projectId, mainFile, { timeoutMs: 180_000 });
   let fixes = 0;
   let finalContent = edit.content;
   while (!compile.hasPdf && fixes < MAX_COMPILE_FIXES) {
     fixes++;
+    onStep({ stage: 'fix', label: `🔧 컴파일 오류 수정 중… (${fixes}회)` });
     const cur = await latexProject.readProjectFile(projectId, file);
     const logTail = (compile.log || '').split('\n').slice(-60).join('\n');
     let fix;
