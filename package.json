@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "better-sqlite3": "^12.10.0",
+    "fflate": "^0.8.3",
     "fix-path": "^5.0.0",
     "pdf-parse": "^1.1.4"
   },
@@ -26,6 +27,7 @@
     "@electron/rebuild": "^4.0.4",
     "electron": "^37.10.3",
     "electron-builder": "^26.8.1",
+    "monaco-editor": "^0.52.2",
     "pdfjs-dist": "4.10.38"
   },
   "author": "kjy56514415 <kjy56514415@gmail.com>",

@@ -20,6 +20,8 @@ import * as library from './core/library.js';
 import * as fileManager from './core/fileManager.js';
 import { parsePdf } from './utils/parsePdf.js';
 import { buildCitationRefMap, citationRefsForText, stripInvalidCitationMarkers } from './public/citationContract.js';
+import * as latexProject from './core/latexProject.js';
+import { detectEngine, compileProject } from './core/latexCompiler.js';
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 const MAX_JSON_BODY_BYTES = 1 * 1024 * 1024;
@@ -46,6 +48,7 @@ const STATIC = {
   '/app.js': { file: 'public/app.js', type: 'application/javascript; charset=utf-8' },
   '/pdfViewer.js': { file: 'public/pdfViewer.js', type: 'application/javascript; charset=utf-8' },
   '/citationContract.js': { file: 'public/citationContract.js', type: 'application/javascript; charset=utf-8' },
+  '/latexEditor.js': { file: 'public/latexEditor.js', type: 'application/javascript; charset=utf-8' },
   '/setup': { file: 'public/setup.html', type: 'text/html; charset=utf-8' },
 };
 
@@ -57,6 +60,10 @@ const VENDOR_TYPES = {
   '.css': 'text/css; charset=utf-8',
   '.map': 'application/json; charset=utf-8',
   '.wasm': 'application/wasm',
+  '.ttf': 'font/ttf',
+  '.svg': 'image/svg+xml',
+  '.html': 'text/html; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
 };
 
 function sseWrite(res, payload) {
@@ -1022,6 +1029,201 @@ function matchLibraryRoute(method, url) {
   return { kind: m[1], id: Number(m[2]), sub: m[3] || '', method };
 }
 
+// ===== LaTeX 프로젝트 라우트 =====
+const MAX_TEX_BODY_BYTES = 10 * 1024 * 1024;
+
+async function handleLatexStatus(req, res) {
+  try {
+    const e = await detectEngine();
+    jsonResponse(res, 200, { engine: e?.engine || null });
+  } catch (err) {
+    jsonResponse(res, 200, { engine: null, error: err.message });
+  }
+}
+
+async function handleProjectList(req, res) {
+  try {
+    jsonResponse(res, 200, { projects: await library.listProjects() });
+  } catch (err) {
+    jsonResponse(res, 500, { error: err.message });
+  }
+}
+
+async function handleProjectCreate(req, res) {
+  const filename = (() => {
+    const raw = req.headers['x-filename'];
+    if (!raw || typeof raw !== 'string') return 'project.zip';
+    try { return path.basename(decodeURIComponent(raw)) || 'project.zip'; } catch { return 'project.zip'; }
+  })();
+  let tempDir;
+  try { tempDir = await mkdtemp(path.join(os.tmpdir(), 'paa-zip-')); }
+  catch (err) { return jsonResponse(res, 500, { error: `임시 디렉토리 생성 실패: ${err.message}` }); }
+  const tempPath = path.join(tempDir, 'upload.zip');
+  try {
+    try { await receiveUpload(req, tempPath); }
+    catch (err) { return jsonResponse(res, 413, { error: err.message }); }
+    const buf = await readFile(tempPath);
+    const baseName = filename.replace(/\.zip$/i, '').trim() || 'LaTeX 프로젝트';
+    const project = await library.createProject({ name: baseName, mainFile: 'main.tex', sourceZip: filename });
+    try {
+      const { mainGuess } = await latexProject.extractZip(buf, project.id);
+      await library.updateProject(project.id, { mainFile: mainGuess });
+    } catch (err) {
+      await library.deleteProject(project.id).catch(() => {});
+      return jsonResponse(res, 400, { error: `ZIP 처리 실패: ${err.message}` });
+    }
+    const full = await library.getProject(project.id);
+    const files = await latexProject.listFiles(project.id);
+    jsonResponse(res, 200, { project: full, files });
+  } catch (err) {
+    jsonResponse(res, 500, { error: err.message });
+  } finally {
+    await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function handleProjectGet(req, res, id) {
+  try {
+    const project = await library.getProject(id);
+    if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+    const files = await latexProject.listFiles(id);
+    let mainContent = '';
+    try { mainContent = await latexProject.readProjectFile(id, project.main_file); } catch { /* ignore */ }
+    let hasPdf = false;
+    try { await fs.promises.stat(fileManager.projectMainPdf(id, project.main_file)); hasPdf = true; } catch { /* ignore */ }
+    jsonResponse(res, 200, { project, files, mainFile: project.main_file, mainContent, hasPdf });
+  } catch (err) {
+    jsonResponse(res, 500, { error: err.message });
+  }
+}
+
+async function handleProjectFileGet(req, res, id, relPath) {
+  try {
+    if (!relPath) return jsonResponse(res, 400, { error: 'path required' });
+    const project = await library.getProject(id);
+    if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+    const content = await latexProject.readProjectFile(id, relPath);
+    jsonResponse(res, 200, { path: relPath, content });
+  } catch (err) {
+    jsonResponse(res, 400, { error: err.message });
+  }
+}
+
+async function handleProjectFilePut(req, res, id, relPath) {
+  try {
+    if (!relPath) return jsonResponse(res, 400, { error: 'path required' });
+    const project = await library.getProject(id);
+    if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+    const body = await readJsonBody(req, { maxBytes: MAX_TEX_BODY_BYTES });
+    if (typeof body.content !== 'string') return jsonResponse(res, 400, { error: 'content(string) required' });
+    await latexProject.writeProjectFile(id, relPath, body.content);
+    await library.touchProject(id).catch(() => {});
+    jsonResponse(res, 200, { ok: true });
+  } catch (err) {
+    jsonResponse(res, 400, { error: err.message });
+  }
+}
+
+async function handleProjectCompile(req, res, id) {
+  try {
+    const project = await library.getProject(id);
+    if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+    let mainFile = project.main_file;
+    try {
+      const body = await readJsonBody(req);
+      if (typeof body.mainFile === 'string' && body.mainFile) mainFile = body.mainFile;
+    } catch { /* 본문 없음 허용 */ }
+    if (mainFile !== project.main_file) await library.updateProject(id, { mainFile }).catch(() => {});
+    try {
+      const result = await compileProject(id, mainFile);
+      await library.touchProject(id).catch(() => {});
+      jsonResponse(res, 200, {
+        ok: result.exitCode === 0 && result.hasPdf,
+        hasPdf: result.hasPdf,
+        engine: result.engine,
+        exitCode: result.exitCode,
+        log: result.log,
+      });
+    } catch (err) {
+      jsonResponse(res, 200, { ok: false, hasPdf: false, error: err.message, log: err.message });
+    }
+  } catch (err) {
+    jsonResponse(res, 500, { error: err.message });
+  }
+}
+
+async function handleProjectPdf(req, res, id) {
+  try {
+    const project = await library.getProject(id);
+    if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+    const pdfPath = fileManager.projectMainPdf(id, project.main_file);
+    let stat;
+    try { stat = await fs.promises.stat(pdfPath); }
+    catch { return jsonResponse(res, 404, { error: 'pdf not found (먼저 컴파일하세요)' }); }
+    res.writeHead(200, {
+      'Content-Type': 'application/pdf',
+      'Content-Length': stat.size,
+      'Content-Disposition': `inline; filename="project-${id}.pdf"`,
+      'Cache-Control': 'no-cache',
+    });
+    const stream = fs.createReadStream(pdfPath);
+    stream.on('error', () => { if (!res.writableEnded) res.end(); });
+    stream.pipe(res);
+  } catch (err) {
+    jsonResponse(res, 500, { error: err.message });
+  }
+}
+
+async function handleProjectUpdate(req, res, id) {
+  try {
+    const project = await library.getProject(id);
+    if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+    const body = await readJsonBody(req);
+    const fields = {};
+    if (typeof body.name === 'string') fields.name = body.name.trim();
+    if (typeof body.mainFile === 'string') fields.mainFile = body.mainFile;
+    if ('folderId' in body) fields.folderId = body.folderId;
+    const row = await library.updateProject(id, fields);
+    jsonResponse(res, 200, row);
+  } catch (err) {
+    jsonResponse(res, 500, { error: err.message });
+  }
+}
+
+async function handleProjectDelete(req, res, id) {
+  try {
+    const ok = await library.deleteProject(id);
+    if (!ok) return jsonResponse(res, 404, { error: 'project not found' });
+    jsonResponse(res, 200, { ok: true });
+  } catch (err) {
+    jsonResponse(res, 500, { error: err.message });
+  }
+}
+
+// /api/library/projects[...] 디스패치 (쿼리스트링 지원 위해 별도 파서)
+function handleProjectsDispatch(req, res) {
+  let u;
+  try { u = new URL(req.url, 'http://127.0.0.1'); } catch { res.writeHead(400); res.end(); return; }
+  const rest = u.pathname.slice('/api/library/projects'.length); // '' | '/123' | '/123/file' ...
+  if (rest === '' || rest === '/') {
+    if (req.method === 'GET') return handleProjectList(req, res);
+    if (req.method === 'POST') return handleProjectCreate(req, res);
+    res.writeHead(405); res.end(); return;
+  }
+  const m = rest.match(/^\/(\d+)(\/[a-z]+)?$/);
+  if (!m) { res.writeHead(404); res.end(); return; }
+  const id = Number(m[1]);
+  const sub = m[2] || '';
+  if (sub === '' && req.method === 'GET') return handleProjectGet(req, res, id);
+  if (sub === '' && req.method === 'PATCH') return handleProjectUpdate(req, res, id);
+  if (sub === '' && req.method === 'DELETE') return handleProjectDelete(req, res, id);
+  if (sub === '/pdf' && req.method === 'GET') return handleProjectPdf(req, res, id);
+  if (sub === '/compile' && req.method === 'POST') return handleProjectCompile(req, res, id);
+  if (sub === '/file' && req.method === 'GET') return handleProjectFileGet(req, res, id, u.searchParams.get('path'));
+  if (sub === '/file' && req.method === 'PUT') return handleProjectFilePut(req, res, id, u.searchParams.get('path'));
+  res.writeHead(405); res.end();
+}
+
 function createAppServer() {
   return http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/analyze') {
@@ -1034,6 +1236,10 @@ function createAppServer() {
       handleLibraryReset(req, res);
     } else if (req.method === 'POST' && req.url === '/api/library/folders') {
       handleLibraryCreateFolder(req, res);
+    } else if (req.method === 'GET' && req.url === '/api/latex-status') {
+      handleLatexStatus(req, res);
+    } else if (req.url && (req.url === '/api/library/projects' || req.url.startsWith('/api/library/projects/') || req.url.startsWith('/api/library/projects?'))) {
+      handleProjectsDispatch(req, res);
     } else if (req.url && req.url.startsWith('/api/library/')) {
       const m = matchLibraryRoute(req.method, req.url);
       if (!m) { res.writeHead(404); res.end(); return; }
