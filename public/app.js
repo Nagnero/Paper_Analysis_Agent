@@ -1683,9 +1683,12 @@ async function refreshLatexEngineBanner() {
       if (latexCompileBtn) { latexCompileBtn.disabled = false; latexCompileBtn.title = `엔진: ${j.engine}`; }
     } else {
       latexEngineBanner.hidden = false;
-      latexEngineBanner.innerHTML = 'LaTeX 컴파일러가 없어 컴파일할 수 없습니다 (편집은 가능). '
-        + '<b>tectonic</b>(단일 바이너리) 또는 TeX Live/MiKTeX 설치 후 다시 여세요. '
-        + '<a href="https://tectonic-typesetting.github.io/en-US/install.html" target="_blank" rel="noopener">tectonic 설치 안내</a>';
+      latexEngineBanner.innerHTML = 'LaTeX 컴파일러가 없어 컴파일할 수 없습니다 (편집은 가능). 아래에서 설치 후 앱을 재시작하세요.<br>'
+        + '<b>MiKTeX</b>(추천 · IEEE/ACM 등 pdfLaTeX 템플릿 호환): '
+        + '<a href="https://miktex.org/download" target="_blank" rel="noopener">miktex.org/download</a> · '
+        + '<b>TeX Live</b>: <a href="https://tug.org/texlive/" target="_blank" rel="noopener">tug.org/texlive</a> · '
+        + '<b>tectonic</b>(무설치 단일 바이너리, 단 XeTeX): '
+        + '<a href="https://tectonic-typesetting.github.io/en-US/install.html" target="_blank" rel="noopener">설치 안내</a>';
       if (latexCompileBtn) latexCompileBtn.disabled = true;
     }
   } catch { /* ignore */ }

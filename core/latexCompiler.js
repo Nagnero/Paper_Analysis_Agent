@@ -160,8 +160,10 @@ export async function compileProject(projectId, mainFile, { timeoutMs = 120_000 
 
   // tectonic(XeTeX)에서 pdfLaTeX 전용 패키지로 실패한 경우 안내.
   if (!hasPdf && det.engine === 'tectonic' && /spotcolor|pdftex\.def|Undefined control sequence/.test(log)) {
-    log += '\n[안내] 이 문서는 pdfLaTeX 전용 패키지(예: spotcolor — IEEE/ACM 템플릿)를 사용하는 것으로 보입니다. '
-      + 'tectonic(XeTeX)으로는 컴파일할 수 없습니다. MiKTeX 또는 TeX Live를 설치하면 앱이 pdfLaTeX(latexmk)로 컴파일합니다.\n';
+    log += '\n[안내] 이 문서는 pdfLaTeX 전용 패키지(예: spotcolor — IEEE/ACM 템플릿)를 사용하는 것으로 보입니다.\n'
+      + 'tectonic(XeTeX)으로는 컴파일할 수 없습니다. 아래 중 하나를 설치하고 앱을 재시작하면 pdfLaTeX(latexmk)로 컴파일됩니다:\n'
+      + '  • MiKTeX (추천): https://miktex.org/download\n'
+      + '  • TeX Live:      https://tug.org/texlive/\n';
   }
   return { engine: det.engine, hasPdf, log, exitCode: lastCode };
 }
