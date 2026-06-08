@@ -212,6 +212,13 @@
               <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="coreInsight">기본값으로 채우기 (저장 필요)</button></div>
             </div>
           </details>
+          <details class="team-agent">
+            <summary>근거 탐색 — "이런 주장하는 파트 있어?" 질문에 근거 제시 (싱글, 작성팀 공용)</summary>
+            <div class="team-agent-body">
+              <textarea id="promptEvidence" spellcheck="false"></textarea>
+              <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="evidence">기본값으로 채우기 (저장 필요)</button></div>
+            </div>
+          </details>
         </div>
         <!-- 분석팀 · 모델 -->
         <div class="settings-pane" data-team="analysis" data-section="model">
@@ -252,11 +259,17 @@
             <select class="llm-model"></select>
             <select class="llm-reasoning"></select>
           </div>
+          <div class="llm-row" data-role="evidence">
+            <label>근거 탐색</label>
+            <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
+            <select class="llm-model"></select>
+            <select class="llm-reasoning"></select>
+          </div>
           <div class="llm-foot"><button type="button" class="reset-llm-btn btn-ghost small">모든 모델 기본값으로</button></div>
         </div>
         <!-- 작성팀 · 오케스트레이터 -->
         <div class="settings-pane" data-team="writing" data-section="orchestrator">
-          <p class="llm-hint">작성팀 오케스트레이터: 지시를 본문/그림·표/인용 모듈로 분류하고 다듬습니다. (변경 후 컴파일 모듈이 항상 실행되어 오류 자동 수정)</p>
+          <p class="llm-hint">작성팀 오케스트레이터: 지시를 본문 / 그림·표 / 인용 / 근거 탐색 모듈로 분류하고 다듬습니다. (수정 작업은 컴파일 모듈이 항상 실행되어 오류 자동 수정 · 근거 탐색은 읽기 전용)</p>
           <textarea id="promptWriteOrchestrator" spellcheck="false"></textarea>
           <button type="button" class="btn-ghost small" data-reset="writeOrchestrator">기본값으로 채우기 (저장 필요)</button>
         </div>

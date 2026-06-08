@@ -10,6 +10,8 @@ const PROMPTS_DIR = path.join(__dirname, '..', 'prompts');
 
 const KEYS = [
   'analyst', 'verifier', 'writer', 'orchestrator', 'coreInsight',
+  // 분석팀 공용 — 근거 탐색(작성팀에서도 사용)
+  'evidence',
   // 논문 작성팀 (본문/그림은 계획→작성→검토 멀티에이전트)
   'writeOrchestrator', 'writePlan', 'writeBody', 'writeFigure', 'writeReview', 'writeCitation', 'writeCompile',
 ];

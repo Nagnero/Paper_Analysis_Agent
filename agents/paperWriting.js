@@ -6,6 +6,7 @@ import * as llmConfig from '../core/llmConfig.js';
 import { getCurrent as getPrompts, fillTemplate } from '../core/promptStore.js';
 import * as latexProject from '../core/latexProject.js';
 import { compileProject } from '../core/latexCompiler.js';
+import { findEvidence } from './evidence.js';
 
 const MAX_CHARS = 80000;
 const MAX_COMPILE_FIXES = 2;
@@ -51,6 +52,19 @@ async function collectBibKeys(projectId) {
     } catch { /* ignore */ }
   }
   return [...new Set(keys)];
+}
+
+// 프로젝트의 모든 .tex 내용을 합쳐 반환(근거 탐색용 문서 텍스트)
+async function collectProjectText(projectId) {
+  const files = (await latexProject.listFiles(projectId)).filter(f => /\.tex$/i.test(f.path));
+  let txt = '';
+  for (const f of files) {
+    try {
+      const body = await latexProject.readProjectFile(projectId, f.path);
+      txt += `\n% ===== ${f.path} =====\n${body}\n`;
+    } catch { /* ignore */ }
+  }
+  return txt.trim();
 }
 
 const MODULE_MAP = {
@@ -100,12 +114,23 @@ export async function runPaperWriting({ projectId, file, mainFile, instruction, 
       backend: orchRole.backend, model: orchRole.model, reasoningEffort: orchRole.reasoningEffort, timeoutMs: 120_000,
     });
     const j = JSON.parse(stripFence(out));
-    if (['writing', 'figure', 'citation'].includes(j.module)) module = j.module;
+    if (['writing', 'figure', 'citation', 'evidence'].includes(j.module)) module = j.module;
     if (typeof j.refinedInstruction === 'string' && j.refinedInstruction.trim()) refined = j.refinedInstruction.trim();
   } catch { /* 분류 실패 → writing + 원지시 */ }
 
-  const moduleLabel = { writing: '✍️ 본문', figure: '📊 그림/표', citation: '📚 인용' }[module] || module;
+  const moduleLabel = { writing: '✍️ 본문', figure: '📊 그림/표', citation: '📚 인용', evidence: '🔎 근거 탐색' }[module] || module;
   onStep({ stage: 'route', label: `🧭 ${moduleLabel} 모듈로 처리`, module });
+
+  // 근거 탐색(읽기 전용): 파일 수정·컴파일 없이 프로젝트 .tex에서 답만 찾는다.
+  if (module === 'evidence') {
+    onStep({ stage: 'evidence', label: '🔎 논문에서 근거 찾는 중…' });
+    const docText = await collectProjectText(projectId);
+    const answer = await findEvidence({ documentText: docText, question: refined });
+    return {
+      module, readOnly: true, answer, note: answer, file,
+      content, compiled: null, fixes: 0, log: '',
+    };
+  }
 
   // 2) 모듈 실행 — 본문/그림은 멀티에이전트(계획→작성→검토), 인용은 단일
   let edit;

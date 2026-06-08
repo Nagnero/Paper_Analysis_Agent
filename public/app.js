@@ -499,13 +499,15 @@ const promptCoreInsight = $('promptCoreInsight');
 const promptOrchestrator = $('promptOrchestrator');
 const PROMPT_FIELDS = {
   analyst: promptAnalyst, verifier: promptVerifier, writer: promptWriter, coreInsight: promptCoreInsight, orchestrator: promptOrchestrator,
+  // 분석팀 공용 — 근거 탐색(작성팀에서도 사용)
+  evidence: $('promptEvidence'),
   // 논문 작성팀 (본문/그림은 계획→작성→검토 멀티에이전트)
   writeOrchestrator: $('promptWriteOrchestrator'), writePlan: $('promptWritePlan'),
   writeBody: $('promptWriteBody'), writeFigure: $('promptWriteFigure'), writeReview: $('promptWriteReview'),
   writeCitation: $('promptWriteCitation'), writeCompile: $('promptWriteCompile'),
 };
 const LLM_ROLES = [
-  'orchestrator', 'analyst', 'verifier', 'writer', 'coreInsight', 'chat',
+  'orchestrator', 'analyst', 'verifier', 'writer', 'coreInsight', 'chat', 'evidence',
   'writeOrchestrator', 'writePlan', 'writeBody', 'writeFigure', 'writeReview', 'writeCitation', 'writeCompile',
 ];
 const saveLlmBtn = $('saveLlmBtn');
@@ -1835,6 +1837,14 @@ async function sendLatexChat() {
     if (!final) throw new Error('응답이 비었습니다');
 
     pending.classList.remove('working');
+
+    // 근거 탐색(읽기 전용): 파일·PDF 변경 없이 답변만 표시
+    if (final.readOnly) {
+      pending.textContent = `🔎 ${final.answer || final.note || '결과 없음'}`;
+      latexChatLog.scrollTop = latexChatLog.scrollHeight;
+      return;
+    }
+
     const moduleLabel = { writing: '✍️ 본문', figure: '📊 그림/표', citation: '📚 인용' }[final.module] || '';
     pending.textContent = `🤖 ${moduleLabel ? '[' + moduleLabel + '] ' : ''}${final.note || '수정 완료'}`;
     if (latexEditor && typeof final.content === 'string' && final.file === state.currentLatexFile) {

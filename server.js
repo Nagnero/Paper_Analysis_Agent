@@ -24,6 +24,7 @@ import * as latexProject from './core/latexProject.js';
 import { detectEngine, compileProject } from './core/latexCompiler.js';
 import { reverseLookup as synctexReverse } from './core/synctex.js';
 import { runPaperWriting } from './agents/paperWriting.js';
+import { findEvidence } from './agents/evidence.js';
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 const MAX_JSON_BODY_BYTES = 1 * 1024 * 1024;
@@ -480,6 +481,23 @@ async function handleLibraryDeletePaper(req, res, id) {
   }
 }
 
+// 분석팀 채팅 오케스트레이터의 라우팅 판단: 질문이 "논문 안에 특정 내용/주장/파트가
+// 있는지(또는 어디 있는지) 찾아 근거를 달라"는 근거 탐색 요청이면 true.
+async function isEvidenceQuestion(question, cfg) {
+  const prompt = `다음은 사용자가 어떤 논문에 대해 한 질문이다. 이 질문이 "논문 안에 특정 주장·내용·파트가 존재하는지, 또는 어디에 있는지 찾아 근거(원문)를 제시해 달라"는 근거 탐색 요청인지 판단하라.
+근거 탐색 요청이면 정확히 EVIDENCE, 그 외(일반 설명·요약·의견·번역 등)면 정확히 GENERAL 한 단어만 출력하라.
+
+질문: ${question}`;
+  try {
+    const out = await callLLM(prompt, {
+      backend: cfg.backend, model: cfg.model, reasoningEffort: cfg.reasoningEffort, timeoutMs: 60_000,
+    });
+    return /EVIDENCE/i.test(out || '') && !/GENERAL/i.test(out || '');
+  } catch {
+    return false;
+  }
+}
+
 async function handleLibraryPaperChat(req, res, paperId) {
   let preparedSelection = null;
   try {
@@ -511,6 +529,20 @@ async function handleLibraryPaperChat(req, res, paperId) {
       await fileManager.writePaperText(paper.id, paperText).catch(() => {});
     }
     const files = await fileManager.readAnalysisFiles(paper.id, latest.id);
+
+    // 오케스트레이션: "논문에 ~라는 파트/주장이 있어?" 같은 근거 탐색 질문은
+    // 근거 탐색(evidence) 에이전트에게 위임한다. (사용자는 이 채팅 = 오케스트레이터하고만 대화)
+    if (!preparedSelection?.imagePath && await isEvidenceQuestion(question, chatCfg)) {
+      const evRole = llmConfig.getRole('evidence');
+      const evAuth = auth[evRole.backend];
+      if (evAuth && evAuth.loggedIn) {
+        const answer = await findEvidence({ documentText: paperText ?? '', question, role: evRole });
+        const evTag = `evidence:${evRole.backend}${evRole.model ? '/' + evRole.model : ''}`;
+        const storedQ = questionWithSelectionMetadata(question, preparedSelection);
+        const { user: uRow, assistant: aRow } = await library.appendChatTurn(latest.id, storedQ, answer, evTag);
+        return jsonResponse(res, 200, { answer, citations: [], chats: [uRow, aRow] });
+      }
+    }
 
     const selectionContext = selectedRegionContext(preparedSelection);
     const promptText = `다음 영어 논문과 한국어 분석 리포트를 참고해 사용자 질문에 답하세요.
@@ -821,7 +853,7 @@ async function handlePromptsPut(req, res) {
   const current = await getPrompts();
   const next = { ...current };
   const allowedPromptKeys = [
-    'analyst', 'verifier', 'writer', 'orchestrator', 'coreInsight',
+    'analyst', 'verifier', 'writer', 'orchestrator', 'coreInsight', 'evidence',
     'writeOrchestrator', 'writePlan', 'writeBody', 'writeFigure', 'writeReview', 'writeCitation', 'writeCompile',
   ];
   for (const k of allowedPromptKeys) {
@@ -1190,6 +1222,7 @@ async function handleProjectChatEdit(req, res, id) {
     sseWrite(res, {
       stage: 'done', ok: true, file: result.file, content: result.content, note: result.note,
       module: result.module, compiled: result.compiled, fixes: result.fixes, log: result.log,
+      readOnly: !!result.readOnly, answer: result.answer || '',
     });
   } catch (err) {
     sseWrite(res, { stage: 'error', error: err.message });
