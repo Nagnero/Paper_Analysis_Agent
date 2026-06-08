@@ -420,6 +420,7 @@ const state = {
   // LaTeX
   currentProjectId: null,
   currentLatexFile: null,
+  latexPreview: null,
   latexFiles: [],
   latexProjects: [],
   latexDirty: false,
@@ -453,6 +454,7 @@ const attachSize = $('attachSize');
 const attachClear = $('attachClear');
 const composerHint = $('composerHint');
 const dropOverlay = $('dropOverlay');
+const dropOverlayCard = dropOverlay ? dropOverlay.querySelector('.drop-overlay-card') : null;
 const openSettingsBtn = $('sidebarSettingsBtn');
 const newAnalysisBtn = $('newAnalysisBtn');
 const newFolderBtn = $('newFolderBtn');
@@ -479,6 +481,9 @@ const latexLogBtn = $('latexLogBtn');
 const latexEngineBanner = $('latexEngineBanner');
 const latexFileTree = $('latexFileTree');
 const latexEditorHost = $('latexEditorHost');
+const latexAssetView = $('latexAssetView');
+const latexUploadBtn = $('latexUploadBtn');
+const latexAssetInput = $('latexAssetInput');
 const latexLog = $('latexLog');
 const latexLogBody = $('latexLogBody');
 const latexLogClose = $('latexLogClose');
@@ -1596,6 +1601,7 @@ function exitLatexMode() {
   if (pdfCloseBtn) pdfCloseBtn.hidden = false;
   state.currentProjectId = null;
   state.currentLatexFile = null;
+  state.latexPreview = null;
   state.latexMainFile = null;
   state.latexFiles = [];
   state.latexDirty = false;
@@ -1658,9 +1664,11 @@ async function openLatexProject(id) {
     state.currentProjectId = id;
     state.latexMainFile = mainFile;
     state.currentLatexFile = mainFile;
+    state.latexPreview = null;
     state.latexFiles = files || [];
     state.latexDirty = false;
     enterLatexMode();
+    showLatexEditorPane();
     if (latexTitle) { latexTitle.textContent = project.name || 'LaTeX 프로젝트'; latexTitle.title = project.name || ''; }
     renderLatexFileTree();
     try {
@@ -1680,26 +1688,100 @@ async function openLatexProject(id) {
   }
 }
 
+// 평탄 파일 목록 → 중첩 디렉터리 트리
+function buildLatexTree(files) {
+  const root = { dirs: new Map(), files: [] };
+  for (const f of files) {
+    const parts = f.path.split('/');
+    let node = root;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const d = parts[i];
+      if (!node.dirs.has(d)) node.dirs.set(d, { dirs: new Map(), files: [] });
+      node = node.dirs.get(d);
+    }
+    node.files.push(f);
+  }
+  return root;
+}
+
+function buildLatexFileButton(f, depth) {
+  const name = f.path.split('/').pop();
+  const kind = f.kind || (f.editable ? 'text' : 'other');
+  const isSel = f.path === state.currentLatexFile || f.path === state.latexPreview;
+  const item = document.createElement('button');
+  item.type = 'button';
+  item.className = 'latex-file'
+    + (isSel ? ' active' : '')
+    + (kind === 'text' ? '' : kind === 'image' ? ' image' : ' readonly');
+  item.style.paddingLeft = (12 + depth * 12) + 'px';
+  const icon = kind === 'image' ? '🖼' : (f.path === state.latexMainFile ? '★' : '📄');
+  item.textContent = `${icon} ${name}`;
+  item.title = kind === 'other' ? `${f.path} (열 수 없음)` : f.path;
+  if (kind === 'text') item.addEventListener('click', () => loadLatexFile(f.path));
+  else if (kind === 'image') item.addEventListener('click', () => showLatexImage(f.path));
+  else item.disabled = true;
+  return item;
+}
+
+function renderLatexTreeNode(node, prefix, depth) {
+  const frag = document.createDocumentFragment();
+  const dirNames = [...node.dirs.keys()].sort((a, b) => a.localeCompare(b));
+  for (const d of dirNames) {
+    const dirPath = prefix ? `${prefix}/${d}` : d;
+    const details = document.createElement('details');
+    details.className = 'latex-dir';
+    // 최상위는 기본 펼침, 현재 선택 파일의 조상 폴더도 펼침
+    const cur = state.currentLatexFile || state.latexPreview || '';
+    details.open = depth === 0 || cur.startsWith(dirPath + '/');
+    const summary = document.createElement('summary');
+    summary.style.paddingLeft = (8 + depth * 12) + 'px';
+    summary.textContent = d;
+    details.appendChild(summary);
+    details.appendChild(renderLatexTreeNode(node.dirs.get(d), dirPath, depth + 1));
+    frag.appendChild(details);
+  }
+  const files = node.files.slice().sort((a, b) => a.path.localeCompare(b.path));
+  for (const f of files) frag.appendChild(buildLatexFileButton(f, depth));
+  return frag;
+}
+
 function renderLatexFileTree() {
   if (!latexFileTree) return;
   latexFileTree.innerHTML = '';
-  for (const f of state.latexFiles) {
-    const item = document.createElement('button');
-    item.type = 'button';
-    item.className = 'latex-file'
-      + (f.path === state.currentLatexFile ? ' active' : '')
-      + (f.editable ? '' : ' readonly');
-    const label = f.path === state.latexMainFile ? `★ ${f.path}` : f.path;
-    item.textContent = label;
-    item.title = f.editable ? f.path : `${f.path} (읽기 전용)`;
-    if (f.editable) item.addEventListener('click', () => loadLatexFile(f.path));
-    else item.disabled = true;
-    latexFileTree.appendChild(item);
-  }
+  const tree = buildLatexTree(state.latexFiles || []);
+  latexFileTree.appendChild(renderLatexTreeNode(tree, '', 0));
+}
+
+// 텍스트 에디터 보이기 / 이미지 미리보기 숨기기
+function showLatexEditorPane() {
+  state.latexPreview = null;
+  if (latexAssetView) latexAssetView.hidden = true;
+  if (latexEditorHost) latexEditorHost.style.display = '';
+  if (latexEditor) setTimeout(() => latexEditor.layout(), 0);
+}
+
+// 이미지 파일 미리보기 (편집 대상은 바뀌지 않음)
+function showLatexImage(filePath) {
+  if (!state.currentProjectId || !latexAssetView) return;
+  state.latexPreview = filePath;
+  if (latexEditorHost) latexEditorHost.style.display = 'none';
+  latexAssetView.hidden = false;
+  latexAssetView.innerHTML = '';
+  const img = document.createElement('img');
+  img.src = `/api/library/projects/${state.currentProjectId}/asset?path=${encodeURIComponent(filePath)}&t=${Date.now()}`;
+  img.alt = filePath;
+  img.onerror = () => { latexAssetView.innerHTML = '<div class="latex-asset-cap">이미지를 불러오지 못했습니다</div>'; };
+  const cap = document.createElement('div');
+  cap.className = 'latex-asset-cap';
+  cap.textContent = filePath;
+  latexAssetView.appendChild(img);
+  latexAssetView.appendChild(cap);
+  renderLatexFileTree();
 }
 
 async function loadLatexFile(filePath) {
-  if (!state.currentProjectId || filePath === state.currentLatexFile) return;
+  if (!state.currentProjectId) return;
+  if (filePath === state.currentLatexFile && !state.latexPreview) return;
   if (state.latexDirty) await saveCurrentLatexFile();
   try {
     const res = await fetch(`/api/library/projects/${state.currentProjectId}/file?path=${encodeURIComponent(filePath)}`);
@@ -1707,11 +1789,37 @@ async function loadLatexFile(filePath) {
     if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
     state.currentLatexFile = filePath;
     state.latexDirty = false;
+    showLatexEditorPane();
     if (latexEditor) latexEditor.setContent(filePath, j.content || '');
     updateLatexSaveState();
     renderLatexFileTree();
   } catch (err) {
     showToast('파일 열기 실패: ' + err.message);
+  }
+}
+
+function isImageFile(f) {
+  if (!f) return false;
+  if (f.type && f.type.startsWith('image/')) return true;
+  return /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(f.name || '');
+}
+
+// 이미지 파일을 현재 프로젝트에 업로드(드래그/선택) → 트리 갱신 후 미리보기
+async function uploadProjectAsset(file) {
+  if (!state.currentProjectId) { showToast('먼저 LaTeX 프로젝트를 여세요'); return; }
+  if (!isImageFile(file)) { showToast('이미지 파일만 추가할 수 있어요'); return; }
+  try {
+    const res = await fetch(`/api/library/projects/${state.currentProjectId}/upload`, {
+      method: 'POST', headers: { 'X-Filename': encodeURIComponent(file.name) }, body: file,
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+    state.latexFiles = j.files || state.latexFiles;
+    renderLatexFileTree();
+    if (j.path) showLatexImage(j.path);
+    showToast(`추가됨: ${j.path}`);
+  } catch (err) {
+    showToast('추가 실패: ' + err.message);
   }
 }
 
@@ -1848,6 +1956,7 @@ async function sendLatexChat() {
     const moduleLabel = { writing: '✍️ 본문', figure: '📊 그림/표', citation: '📚 인용' }[final.module] || '';
     pending.textContent = `🤖 ${moduleLabel ? '[' + moduleLabel + '] ' : ''}${final.note || '수정 완료'}`;
     if (latexEditor && typeof final.content === 'string' && final.file === state.currentLatexFile) {
+      if (state.latexPreview) { showLatexEditorPane(); renderLatexFileTree(); }
       latexEditor.setContent(state.currentLatexFile, final.content);
       state.latexDirty = false;
       updateLatexSaveState();
@@ -2159,6 +2268,11 @@ window.addEventListener('dragenter', (e) => {
   if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
   e.preventDefault();
   dragDepth++;
+  if (dropOverlayCard) {
+    dropOverlayCard.textContent = state.mode === 'latex'
+      ? '이미지를 놓으면 프로젝트에 추가됩니다 (ZIP은 새 프로젝트)'
+      : 'PDF를 여기에 놓으세요';
+  }
   dropOverlay.hidden = false;
 });
 window.addEventListener('dragover', (e) => {
@@ -2178,9 +2292,18 @@ window.addEventListener('drop', (e) => {
   e.preventDefault();
   dragDepth = 0;
   dropOverlay.hidden = true;
-  const files = e.dataTransfer?.files;
-  const f = files && files[0];
-  if (!f) return;
+  const files = Array.from(e.dataTransfer?.files || []);
+  if (!files.length) return;
+  // LaTeX 모드: 이미지는 현재 프로젝트에 추가, ZIP은 새 프로젝트
+  if (state.mode === 'latex' && state.currentProjectId) {
+    const imgs = files.filter(isImageFile);
+    if (imgs.length) { (async () => { for (const img of imgs) await uploadProjectAsset(img); })(); return; }
+    const zip = files.find(isZip);
+    if (zip) { uploadLatexZip(zip); return; }
+    showToast('이미지 파일 또는 ZIP만 추가할 수 있어요');
+    return;
+  }
+  const f = files[0];
   if (isZip(f)) uploadLatexZip(f);
   else setAttachment(f);
 });
@@ -2193,6 +2316,12 @@ if (zipInput) zipInput.addEventListener('change', () => {
   zipInput.value = '';
 });
 if (latexCompileBtn) latexCompileBtn.addEventListener('click', compileLatex);
+if (latexUploadBtn) latexUploadBtn.addEventListener('click', () => latexAssetInput && latexAssetInput.click());
+if (latexAssetInput) latexAssetInput.addEventListener('change', async () => {
+  const files = Array.from(latexAssetInput.files || []);
+  for (const f of files) await uploadProjectAsset(f);
+  latexAssetInput.value = '';
+});
 if (latexChatSend) latexChatSend.addEventListener('click', sendLatexChat);
 if (latexChatInput) latexChatInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendLatexChat(); }

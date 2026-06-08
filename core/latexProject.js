@@ -15,8 +15,28 @@ const ARTIFACT_EXT = new Set([
   '.dvi', '.idx', '.ind', '.ilg', '.run.xml', '.pdf',
 ]);
 
+// 미리보기(이미지) 가능 + 업로드 허용 자산 확장자
+const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg']);
+const MAX_ASSET_BYTES = 20 * 1024 * 1024; // 업로드 1파일 상한
+
 export function isEditablePath(rel) {
   return EDITABLE_EXT.has(path.extname(rel).toLowerCase());
+}
+
+export function isImagePath(rel) {
+  return IMAGE_EXT.has(path.extname(rel).toLowerCase());
+}
+
+// 업로드(드래그/선택)로 추가 가능한 자산 — 현재는 이미지
+export function isUploadableAsset(rel) {
+  return IMAGE_EXT.has(path.extname(rel).toLowerCase());
+}
+
+// 파일 종류: 'text'(편집 가능) | 'image'(미리보기) | 'other'(읽기 전용)
+export function fileKind(rel) {
+  if (isEditablePath(rel)) return 'text';
+  if (isImagePath(rel)) return 'image';
+  return 'other';
 }
 
 export function isArtifactPath(rel) {
@@ -127,7 +147,7 @@ export async function listFiles(projectId) {
       if (isArtifactPath(rel)) continue; // 컴파일 산출물 숨김
       let size = 0;
       try { size = (await fs.stat(path.join(absDir, e.name))).size; } catch { /* ignore */ }
-      out.push({ path: rel, size, editable: isEditablePath(rel) });
+      out.push({ path: rel, size, editable: isEditablePath(rel), kind: fileKind(rel) });
     }
   }
   await walk(srcDir, '');
@@ -150,6 +170,23 @@ function resolveInSrc(projectId, relPath) {
 export async function readProjectFile(projectId, relPath) {
   const abs = resolveInSrc(projectId, relPath);
   return await fs.readFile(abs, 'utf8');
+}
+
+// 바이너리(이미지 등) 원본 바이트 — 미리보기/다운로드용
+export async function readProjectFileBuffer(projectId, relPath) {
+  const abs = resolveInSrc(projectId, relPath);
+  return await fs.readFile(abs);
+}
+
+// 업로드된 자산(이미지) 저장. 편집 불가 형식이지만 프로젝트에 추가 가능.
+export async function writeProjectAsset(projectId, relPath, buffer) {
+  if (!isUploadableAsset(relPath)) throw new Error('업로드할 수 없는 파일 형식입니다 (이미지만 가능).');
+  const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+  if (buf.length > MAX_ASSET_BYTES) throw new Error('파일이 너무 큽니다 (최대 20MB).');
+  const abs = resolveInSrc(projectId, relPath);
+  await ensureDir(path.dirname(abs));
+  await fs.writeFile(abs, buf);
+  return String(relPath).replace(/\\/g, '/');
 }
 
 export async function writeProjectFile(projectId, relPath, content) {

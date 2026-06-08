@@ -94,6 +94,8 @@
             <span id="latexSaveState" class="latex-savestate"></span>
             <span id="latexCompileStatus" class="latex-compile-status" hidden></span>
             <span class="spacer"></span>
+            <button type="button" id="latexUploadBtn" class="latex-btn" title="이미지 파일 추가 (드래그도 가능)">⬆ 이미지</button>
+            <input id="latexAssetInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/bmp,image/svg+xml" hidden multiple />
             <button type="button" id="latexZipBtn" class="latex-btn" title="프로젝트 ZIP 다운로드">⬇ ZIP</button>
             <button type="button" id="latexLogBtn" class="latex-btn" title="컴파일 로그">로그</button>
             <button type="button" id="latexCompileBtn" class="latex-btn primary">컴파일</button>
@@ -102,6 +104,7 @@
           <div class="latex-body">
             <div id="latexFileTree" class="latex-filetree"></div>
             <div id="latexEditorHost" class="latex-editor"></div>
+            <div id="latexAssetView" class="latex-asset-view" hidden></div>
           </div>
           <div id="latexLog" class="latex-log" hidden>
             <div class="latex-log-head"><span>컴파일 로그</span><button type="button" id="latexLogClose" class="latex-log-close" aria-label="로그 닫기">×</button></div>

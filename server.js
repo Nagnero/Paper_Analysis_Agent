@@ -1288,6 +1288,59 @@ async function handleProjectPdf(req, res, id) {
   }
 }
 
+const ASSET_CONTENT_TYPE = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
+  '.webp': 'image/webp', '.bmp': 'image/bmp', '.svg': 'image/svg+xml',
+};
+
+// 이미지 등 바이너리 자산 원본 서빙 (미리보기용)
+async function handleProjectAssetGet(req, res, id, relPath) {
+  try {
+    if (!relPath) return jsonResponse(res, 400, { error: 'path required' });
+    const project = await library.getProject(id);
+    if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+    const buf = await latexProject.readProjectFileBuffer(id, relPath);
+    const ct = ASSET_CONTENT_TYPE[path.extname(relPath).toLowerCase()] || 'application/octet-stream';
+    res.writeHead(200, { 'Content-Type': ct, 'Content-Length': buf.length, 'Cache-Control': 'no-cache' });
+    res.end(buf);
+  } catch (err) {
+    jsonResponse(res, 400, { error: err.message });
+  }
+}
+
+// 이미지 파일 업로드(드래그/선택) → 프로젝트 src 에 저장
+async function handleProjectAssetUpload(req, res, id, params) {
+  const project = await library.getProject(id);
+  if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+  let fname = 'image.png';
+  const rawName = req.headers['x-filename'];
+  if (typeof rawName === 'string') {
+    try { fname = path.basename(decodeURIComponent(rawName)) || fname; } catch { /* keep default */ }
+  }
+  let dir = (params && params.get('dir')) || '';
+  dir = String(dir).replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  if (!dir || dir.split('/').includes('..')) dir = '';
+  const rel = dir ? `${dir}/${fname}` : fname;
+
+  let tempDir;
+  try { tempDir = await mkdtemp(path.join(os.tmpdir(), 'paa-asset-')); }
+  catch (err) { return jsonResponse(res, 500, { error: `임시 디렉토리 생성 실패: ${err.message}` }); }
+  const tempPath = path.join(tempDir, 'asset');
+  try {
+    try { await receiveUpload(req, tempPath); }
+    catch (err) { return jsonResponse(res, 413, { error: err.message }); }
+    const buf = await readFile(tempPath);
+    const saved = await latexProject.writeProjectAsset(id, rel, buf);
+    await library.touchProject(id).catch(() => {});
+    const files = await latexProject.listFiles(id);
+    jsonResponse(res, 200, { ok: true, path: saved, files });
+  } catch (err) {
+    jsonResponse(res, 400, { error: err.message });
+  } finally {
+    await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 async function handleProjectUpdate(req, res, id) {
   try {
     const project = await library.getProject(id);
@@ -1338,6 +1391,8 @@ function handleProjectsDispatch(req, res) {
   if (sub === '/chat-edit' && req.method === 'POST') return handleProjectChatEdit(req, res, id);
   if (sub === '/file' && req.method === 'GET') return handleProjectFileGet(req, res, id, u.searchParams.get('path'));
   if (sub === '/file' && req.method === 'PUT') return handleProjectFilePut(req, res, id, u.searchParams.get('path'));
+  if (sub === '/asset' && req.method === 'GET') return handleProjectAssetGet(req, res, id, u.searchParams.get('path'));
+  if (sub === '/upload' && req.method === 'POST') return handleProjectAssetUpload(req, res, id, u.searchParams);
   res.writeHead(405); res.end();
 }
 
