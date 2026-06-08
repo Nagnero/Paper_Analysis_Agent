@@ -4,17 +4,17 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { projectSrcDir, projectOutDir, projectMainPdf, ensureDir } from './fileManager.js';
+import { projectSrcDir, projectMainPdf } from './fileManager.js';
 
 const IS_WIN = process.platform === 'win32';
 const EXE = IS_WIN ? '.exe' : '';
 
-// 선호 순서: latexmk → pdflatex (풀 TeX = pdfLaTeX, IEEE/ACM 등 pdfTeX 전용 패키지 호환)
-// → tectonic(XeTeX 기반, 설치 불필요하지만 spotcolor 등 pdfLaTeX 전용 패키지는 미지원) 폴백.
-// 특정 엔진 강제는 PAA_LATEX_ENGINE 환경변수(전체 경로)로.
+// 선호 순서: pdflatex(직접 bibtex/biber 다중패스 — 결정적, Perl 불필요) →
+// latexmk(풀 자동화, 단 Perl 필요·MiKTeX에서 불안정) → tectonic(XeTeX, 무설치 폴백) .
+// pdfLaTeX = IEEE/ACM 등 pdfTeX 전용 패키지(spotcolor) 호환. 특정 엔진 강제는 PAA_LATEX_ENGINE.
 const ENGINES = [
-  { engine: 'latexmk', versionArgs: ['-version'] },
   { engine: 'pdflatex', versionArgs: ['--version'] },
+  { engine: 'latexmk', versionArgs: ['-version'] },
   { engine: 'tectonic', versionArgs: ['--version'] },
 ];
 
@@ -92,20 +92,9 @@ export async function detectEngine(force = false) {
   return null;
 }
 
-function buildRuns(engine, main) {
-  switch (engine) {
-    case 'tectonic':
-      return [[main, '--outdir', '../out', '--keep-logs']];
-    case 'latexmk':
-      return [['-pdf', '-interaction=nonstopmode', '-halt-on-error', '-outdir=../out', main]];
-    case 'pdflatex':
-    default:
-      // bib/상호참조 없이 2회 (간이 폴백)
-      return [
-        ['-interaction=nonstopmode', '-halt-on-error', '-output-directory=../out', main],
-        ['-interaction=nonstopmode', '-halt-on-error', '-output-directory=../out', main],
-      ];
-  }
+// 같은 bin 디렉터리의 보조 도구(bibtex/biber) 경로. cmd 가 전체경로면 형제 파일로.
+function siblingTool(cmd, name) {
+  return path.isAbsolute(cmd) ? path.join(path.dirname(cmd), name + EXE) : name;
 }
 
 function runOnce(cmd, args, cwd, timeoutMs) {
@@ -126,8 +115,27 @@ function runOnce(cmd, args, cwd, timeoutMs) {
   });
 }
 
+// .aux 에 인용/참고문헌이 있으면 bibtex, .bcf 가 있으면 biber 를 src 안에서 실행.
+async function runBibStep(cmd, srcDir, base, timeoutMs) {
+  // biblatex(biber)
+  try {
+    await fs.stat(path.join(srcDir, base + '.bcf'));
+    const r = await runOnce(siblingTool(cmd, 'biber'), [base], srcDir, timeoutMs);
+    return `$ biber ${base}\n${r.output}\n`;
+  } catch { /* no .bcf */ }
+  // bibtex
+  try {
+    const aux = await fs.readFile(path.join(srcDir, base + '.aux'), 'utf8');
+    if (/\\bibdata|\\citation/.test(aux)) {
+      const r = await runOnce(siblingTool(cmd, 'bibtex'), [base], srcDir, timeoutMs);
+      return `$ bibtex ${base}\n${r.output}\n`;
+    }
+  } catch { /* no .aux */ }
+  return '';
+}
+
 /**
- * 프로젝트 컴파일. cwd=src, 산출물=../out.
+ * 프로젝트 컴파일. src 안에서 in-place 로 수행(참고문헌/MiKTeX 호환).
  * @returns {Promise<{engine:string, hasPdf:boolean, log:string, exitCode:number}>}
  */
 export async function compileProject(projectId, mainFile, { timeoutMs = 120_000 } = {}) {
@@ -141,18 +149,38 @@ export async function compileProject(projectId, mainFile, { timeoutMs = 120_000 
     throw new Error('메인 파일 경로에 공백/특수문자가 있어 컴파일할 수 없습니다. 파일명을 영문/숫자로 바꿔주세요.');
   }
   const srcDir = projectSrcDir(projectId);
-  await ensureDir(projectOutDir(projectId));
   try { await fs.stat(path.join(srcDir, main)); }
   catch { throw new Error(`메인 파일이 없습니다: ${main}`); }
+  const base = main.replace(/\.tex$/i, '');
 
   let log = '';
   let lastCode = 0;
-  for (const args of buildRuns(det.engine, main)) {
-    const r = await runOnce(det.cmd, args, srcDir, timeoutMs);
-    log += `$ ${det.engine} ${args.join(' ')}\n${r.output}\n`;
+  const run = async (cmd, args) => {
+    const r = await runOnce(cmd, args, srcDir, timeoutMs);
+    log += `$ ${path.basename(cmd)} ${args.join(' ')}\n${r.output}\n`;
+    if (r.timedOut) log += `\n[타임아웃 ${timeoutMs}ms — 중단]\n`;
     lastCode = r.code;
-    if (r.timedOut) { log += `\n[타임아웃 ${timeoutMs}ms — 중단]\n`; break; }
-    if (r.code !== 0 && det.engine !== 'pdflatex') break;
+    return r;
+  };
+
+  if (det.engine === 'tectonic') {
+    // tectonic: 단일 실행, bib·다중패스 내부 처리
+    await run(det.cmd, [main, '--synctex', '--keep-logs']);
+  } else if (det.engine === 'latexmk') {
+    // latexmk: bib·다중패스·synctex 내부 처리 (Perl 필요)
+    await run(det.cmd, ['-pdf', '-interaction=nonstopmode', '-synctex=1', main]);
+  } else {
+    // pdflatex: 직접 다중패스 + bibtex/biber (참고문헌 해결)
+    const pdfArgs = ['-interaction=nonstopmode', '-synctex=1', main];
+    const first = await run(det.cmd, pdfArgs);
+    if (!first.timedOut) {
+      const bibLog = await runBibStep(det.cmd, srcDir, base, timeoutMs);
+      if (bibLog) {
+        log += bibLog;
+        await run(det.cmd, pdfArgs); // 참고문헌 반영
+      }
+      await run(det.cmd, pdfArgs);   // 상호참조 안정화
+    }
   }
 
   let hasPdf = false;

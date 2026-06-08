@@ -7,10 +7,22 @@ import { projectSrcDir, ensureDir } from './fileManager.js';
 
 const MAX_FILES = 3000;
 const MAX_TOTAL_BYTES = 120 * 1024 * 1024; // 해제 후 총량 상한
-const EDITABLE_EXT = new Set(['.tex', '.bib', '.cls', '.sty', '.bbl', '.txt', '.md', '.sty', '.def', '.ltx', '.tikz']);
+const EDITABLE_EXT = new Set(['.tex', '.bib', '.cls', '.sty', '.txt', '.md', '.def', '.ltx', '.tikz']);
+// in-place 컴파일 산출물 — 파일 트리에서 숨긴다.
+const ARTIFACT_EXT = new Set([
+  '.aux', '.log', '.out', '.bbl', '.blg', '.bcf', '.toc', '.lof', '.lot',
+  '.fls', '.fdb_latexmk', '.synctex', '.gz', '.nav', '.snm', '.vrb', '.xdv',
+  '.dvi', '.idx', '.ind', '.ilg', '.run.xml', '.pdf',
+]);
 
 export function isEditablePath(rel) {
   return EDITABLE_EXT.has(path.extname(rel).toLowerCase());
+}
+
+export function isArtifactPath(rel) {
+  const lower = rel.toLowerCase();
+  if (lower.endsWith('.synctex.gz') || lower.endsWith('.run.xml')) return true;
+  return ARTIFACT_EXT.has(path.extname(lower));
 }
 
 // zip 엔트리 이름을 안전한 상대 경로(posix)로. 거부 시 null.
@@ -112,6 +124,7 @@ export async function listFiles(projectId) {
     for (const e of entries) {
       const rel = relDir ? `${relDir}/${e.name}` : e.name;
       if (e.isDirectory()) { await walk(path.join(absDir, e.name), rel); continue; }
+      if (isArtifactPath(rel)) continue; // 컴파일 산출물 숨김
       let size = 0;
       try { size = (await fs.stat(path.join(absDir, e.name))).size; } catch { /* ignore */ }
       out.push({ path: rel, size, editable: isEditablePath(rel) });

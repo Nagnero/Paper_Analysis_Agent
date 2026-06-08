@@ -133,10 +133,16 @@ export function projectOutDir(projectId) {
   return path.join(projectDir(projectId), 'out');
 }
 
-// mainFile(예: 'main.tex' 또는 'paper/main.tex')에 대응하는 산출 PDF 경로.
+// 컴파일은 src 안에서 in-place 로 수행한다(MiKTeX bibtex 의 `..`/절대경로 쓰기 제한 회피).
+// mainFile(예: 'main.tex' 또는 'paper/main.tex')에 대응하는 산출 PDF/SyncTeX 경로.
 export function projectMainPdf(projectId, mainFile) {
-  const base = path.basename(String(mainFile || 'main.tex')).replace(/\.tex$/i, '');
-  return path.join(projectOutDir(projectId), `${base}.pdf`);
+  const rel = String(mainFile || 'main.tex').replace(/\.tex$/i, '');
+  return path.join(projectSrcDir(projectId), `${rel}.pdf`);
+}
+
+export function projectSyncTex(projectId, mainFile) {
+  const rel = String(mainFile || 'main.tex').replace(/\.tex$/i, '');
+  return path.join(projectSrcDir(projectId), `${rel}.synctex.gz`);
 }
 
 export async function deleteProjectDir(projectId) {
