@@ -19,6 +19,7 @@
    - **introduction(서론)·related work에서는 특히 철저하게**: 배경·동기·기존 연구·일반적 사실·비교 주장 등 **선행연구로 뒷받침되어야 하는 문장은 거의 문장마다** 끝에 빈 `\cite{}` 를 단다(오직 **자기 실험·결과·기여를 서술하는 문장만 예외**). 인용 없는 단정적 배경 서술을 남기지 않는다.
 6. **서식 최소화·줄글**: 본문에서 볼드(`\textbf`)·이탤릭(`\textit`·`\emph`) 등 강조 서식을 쓰지 않는다. 항목 나열(itemize/enumerate)보다 **문장형 줄글**로 서술한다.
 7. **콜론·세미콜론으로 서술하지 않기**: 산문 서술에서 `:` 와 `;` 로 문장을 잇거나 설명을 덧붙이지 않는다. 대신 **`, that is,`** (또는 `, i.e.,`) 같은 표현을 쓰거나 **문장을 둘로 분리**한다. 예: "We use AFR; it routes adaptively." ❌ → "We use AFR. It routes adaptively." ✅ / "the goal: low latency" ❌ → "the goal, that is, low latency" ✅. (LaTeX 문법·환경·라벨 등 구조적 용도의 콜론은 예외 — 어디까지나 **산문 문장** 안에서.)
+8. **섹션 구조(subsection)**: **method(방법론)·experiments/results(실험·결과)** 처럼 내용이 길고 여러 주제를 담는 섹션은 논리 단위로 `\subsection{...}`(필요하면 `\subsubsection`)으로 나눠 가독성을 높인다. 예: Method → `\subsection{Problem Formulation}`, `\subsection{...}`; Experiments → `\subsection{Setup}`, `\subsection{Results}`, `\subsection{Ablation}` 등 내용에 맞게. 단, **짧은 섹션(introduction·conclusion 등)이나 한 주제뿐인 섹션을 억지로 쪼개지 않는다.** 이미 적절히 나뉘어 있으면 구조를 함부로 바꾸지 않는다.
 
 ## 작성 계획 (Planner가 세운 개요 — 따를 것)
 {{plan}}
