@@ -358,6 +358,13 @@
               <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="research">기본값으로 채우기 (저장 필요)</button></div>
             </div>
           </details>
+          <details class="team-agent">
+            <summary>일반 채팅 — 전문 모듈에 안 맞는 요청을 튜닝 없이 대화로 답변 (읽기 전용)</summary>
+            <div class="team-agent-body">
+              <textarea id="promptWriteChat" spellcheck="false"></textarea>
+              <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="writeChat">기본값으로 채우기 (저장 필요)</button></div>
+            </div>
+          </details>
         </div>
         <!-- 작성팀 · 모델 -->
         <div class="settings-pane" data-team="writing" data-section="model">
@@ -412,6 +419,12 @@
           </div>
           <div class="llm-row" data-role="research">
             <label>리서치 (웹)</label>
+            <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
+            <select class="llm-model"></select>
+            <select class="llm-reasoning"></select>
+          </div>
+          <div class="llm-row" data-role="writeChat">
+            <label>일반 채팅</label>
             <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
             <select class="llm-model"></select>
             <select class="llm-reasoning"></select>

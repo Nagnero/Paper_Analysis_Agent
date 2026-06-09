@@ -521,11 +521,11 @@ const PROMPT_FIELDS = {
   // 논문 작성팀 (본문/그림은 계획→작성→검토 멀티에이전트)
   writeOrchestrator: $('promptWriteOrchestrator'), scopeLocator: $('promptScopeLocator'), writePlan: $('promptWritePlan'),
   writeBody: $('promptWriteBody'), writeFigure: $('promptWriteFigure'), writeReview: $('promptWriteReview'),
-  writeCitation: $('promptWriteCitation'), writeCompile: $('promptWriteCompile'), research: $('promptResearch'),
+  writeCitation: $('promptWriteCitation'), writeCompile: $('promptWriteCompile'), research: $('promptResearch'), writeChat: $('promptWriteChat'),
 };
 const LLM_ROLES = [
   'orchestrator', 'analyst', 'verifier', 'writer', 'coreInsight', 'chat', 'evidence',
-  'writeOrchestrator', 'scopeLocator', 'writePlan', 'writeBody', 'writeFigure', 'writeReview', 'writeCitation', 'writeCompile', 'research',
+  'writeOrchestrator', 'scopeLocator', 'writePlan', 'writeBody', 'writeFigure', 'writeReview', 'writeCitation', 'writeCompile', 'research', 'writeChat',
 ];
 const saveLlmBtn = $('saveLlmBtn');
 const resetLlmBtn = $('resetLlmBtn');
@@ -2195,7 +2195,7 @@ async function sendLatexChat() {
 
     // 근거 탐색·웹 리서치(읽기 전용): 파일·PDF 변경 없이 답변만 표시
     if (final.readOnly) {
-      const icon = final.module === 'research' ? '🌐' : '🔎';
+      const icon = final.module === 'research' ? '🌐' : final.module === 'chat' ? '💬' : '🔎';
       pending.textContent = `${icon} ${final.answer || final.note || '결과 없음'}`;
       recordLatexChat('ai', pending.textContent);
       latexChatLog.scrollTop = latexChatLog.scrollHeight;

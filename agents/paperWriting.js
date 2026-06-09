@@ -170,6 +170,20 @@ async function runResearchStep(projectId, rawInstruction, stepInstruction, mainF
   }
 }
 
+// 일반 채팅(읽기 전용) → 답변 텍스트. 전문 모듈에 안 맞는 요청을 튜닝 없는 도우미가 답함.
+async function runChatStep(question, history) {
+  const prompts = await getPrompts();
+  const role = llmConfig.getRole('writeChat');
+  try {
+    const out = await callLLM(fillTemplate(prompts.writeChat, { question, history: history || '(이전 대화 없음)' }), {
+      backend: role.backend, model: role.model, reasoningEffort: role.reasoningEffort, timeoutMs: 180_000,
+    });
+    return (out || '').trim();
+  } catch (err) {
+    return `답변 생성에 실패했습니다: ${err.message}`;
+  }
+}
+
 // 편집 단계 1회(writing/figure/citation) → {content, note}. 범위 지정으로 부분만 수정.
 async function runEditStep({ projectId, file, module, content, instruction, history, onStep }) {
   if (module === 'citation') {
@@ -218,7 +232,7 @@ export async function runPaperWriting({ projectId, file, mainFile, instruction, 
     else if (j.module) steps = [{ module: j.module, instruction: j.refinedInstruction || instruction }];
   } catch { /* 실패 → 기본 writing */ }
   steps = steps
-    .filter(s => s && ['writing', 'figure', 'citation', 'evidence', 'research'].includes(s.module) && typeof s.instruction === 'string' && s.instruction.trim())
+    .filter(s => s && ['writing', 'figure', 'citation', 'evidence', 'research', 'chat'].includes(s.module) && typeof s.instruction === 'string' && s.instruction.trim())
     .slice(0, MAX_STEPS);
   if (!steps.length) steps = [{ module: 'writing', instruction }];
 
@@ -245,6 +259,12 @@ export async function runPaperWriting({ projectId, file, mainFile, instruction, 
       const ans = await runResearchStep(projectId, instruction, st.instruction, mainFile);
       readOnlyAnswers.push(`🌐 [웹 리서치]\n${ans}`);
       priorContext += `\n[웹 리서치 결과] ${ans}\n`;
+    } else if (st.module === 'chat') {
+      onStep({ stage: 'step', label: `${tag}💬 답변 생성…` });
+      const ctx = convHistory + (priorContext ? `\n\n[이전 단계 결과]\n${priorContext}` : '');
+      const ans = await runChatStep(st.instruction, ctx);
+      readOnlyAnswers.push(`💬 ${ans}`);
+      priorContext += `\n[채팅 답변] ${ans}\n`;
     } else {
       onStep({ stage: 'step', label: `${tag}${MODLABEL[st.module]} 작성…` });
       const curContent = await latexProject.readProjectFile(projectId, file);
