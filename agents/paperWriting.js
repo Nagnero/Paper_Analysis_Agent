@@ -26,17 +26,26 @@ function stripFence(text) {
   return f !== null ? f : text;
 }
 
-// 모듈 1회 실행: 프롬프트 채우고 LLM 호출 → {content, note}
+// 모듈 1회 실행: 프롬프트 채우고 LLM 호출 → {content, note}.
+// 코드블록(수정된 전체 파일)을 못 찾으면 형식 리마인더와 함께 1회 재시도.
+const FENCE_REMINDER = '\n\n[중요] 반드시 수정된 **전체 파일 내용**을 하나의 ```latex 코드블록으로 반환하세요. 변경이 없어도 파일 전체를 코드블록에 담아야 합니다. 설명만 적고 코드블록을 빠뜨리지 마세요.';
 async function runModule(promptKey, roleName, vars) {
   const prompts = await getPrompts();
   const tpl = prompts[promptKey];
   if (!tpl) throw new Error(`프롬프트 없음: ${promptKey}`);
   const role = llmConfig.getRole(roleName);
-  const out = await callLLM(fillTemplate(tpl, vars), {
-    backend: role.backend, model: role.model, reasoningEffort: role.reasoningEffort, timeoutMs: 600_000,
-  });
-  const edited = extractFenced(out);
-  if (edited === null) throw new Error('AI 응답에서 코드블록(수정된 파일)을 찾지 못했습니다.');
+  const filled = fillTemplate(tpl, vars);
+  const opts = { backend: role.backend, model: role.model, reasoningEffort: role.reasoningEffort, timeoutMs: 600_000 };
+
+  let out = await callLLM(filled, opts);
+  let edited = extractFenced(out);
+  if (edited === null) { // 형식 슬립 → 리마인더 붙여 1회 재시도
+    out = await callLLM(filled + FENCE_REMINDER, opts);
+    edited = extractFenced(out);
+  }
+  if (edited === null) {
+    throw new Error('AI가 수정된 전체 파일(```latex 코드블록)을 반환하지 않았습니다. 파일이 너무 크거나(출력 잘림) 형식 오류일 수 있어요.');
+  }
   const note = (out.split('```')[0] || '').trim() || '수정 완료';
   return { content: edited.replace(/\s*$/, '') + '\n', note };
 }
@@ -108,8 +117,13 @@ async function multiAgentEdit({ module, fileName, content, instruction, onStep, 
   onStep({ stage: 'write', label: `✍️ ${sel.type} 작성 중…` });
   const draft = await runModule(sel.prompt, sel.role, { fileName, content, instruction, plan, history });
   onStep({ stage: 'review', label: '🔍 검토 중…' });
-  const reviewed = await runModule('writeReview', 'writeReview', { fileName, content: draft.content, instruction, plan, history });
-  return { content: reviewed.content, note: `[계획→작성→검토] ${reviewed.note}` };
+  // 검토는 비치명적: 검토가 코드블록을 안 돌려주면(수정 불필요 등) 작성 초안을 그대로 채택.
+  try {
+    const reviewed = await runModule('writeReview', 'writeReview', { fileName, content: draft.content, instruction, plan, history });
+    return { content: reviewed.content, note: `[계획→작성→검토] ${reviewed.note}` };
+  } catch {
+    return { content: draft.content, note: `[계획→작성] ${draft.note} (검토 생략)` };
+  }
 }
 
 const MODLABEL = { writing: '✍️ 본문', figure: '📊 그림·표', citation: '📚 인용', evidence: '🔎 근거탐색', research: '🌐 리서치' };
