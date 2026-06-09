@@ -46,6 +46,7 @@ export function createPdfViewer(container) {
   let selectionMode = false;
   let selectionHandler = null;
   let reverseHandler = null;  // SyncTeX 역방향: 더블클릭 → {page, x, y}(pt, 좌상단)
+  let figureCandidatesOn = true; // figure 클릭-분석 후보 박스 표시 여부(분석 모드만 true)
 
   // 더블클릭 → 페이지 + PDF 포인트(pt) 계산해 콜백 (텍스트 선택 모드일 땐 무시)
   container.addEventListener('dblclick', (e) => {
@@ -512,6 +513,7 @@ export function createPdfViewer(container) {
     const layer = pageDiv.querySelector('.pdf-selection-layer');
     if (!layer) return;
     layer.querySelectorAll('.pdf-figure-candidate').forEach(el => el.remove());
+    if (!figureCandidatesOn) return; // LaTeX 컴파일 결과 등에선 figure 후보 박스 비표시
     const captions = captionBlocksForPage(pageDiv).slice(0, 12);
 
     captions.forEach((caption, idx) => {
@@ -979,6 +981,14 @@ export function createPdfViewer(container) {
     reverseHandler = typeof callback === 'function' ? callback : null;
   }
 
+  // figure 클릭-분석 후보 박스 on/off. 끄면 기존에 그려진 박스도 제거.
+  function setFigureCandidates(on) {
+    figureCandidatesOn = !!on;
+    if (!figureCandidatesOn && container) {
+      container.querySelectorAll('.pdf-figure-candidate').forEach((el) => el.remove());
+    }
+  }
+
   return {
     load,
     destroy,
@@ -992,5 +1002,6 @@ export function createPdfViewer(container) {
     clearSelection,
     isSelectionMode,
     onReverseSearch,
+    setFigureCandidates,
   };
 }

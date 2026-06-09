@@ -702,6 +702,7 @@ function ensurePdfWidth() { applyPdfRatio(pdfRatio); }
 // 저장된 논문 PDF를 서버에서 로드. title 생략 시 기존 제목 유지.
 function showPaperPdf(paperId, title) {
   if (!pdfViewer) return;
+  pdfViewer.setFigureCandidates?.(true); // 분석 모드: figure 클릭-분석 박스 표시
   clearPdfSelection();
   revokePdfBlob();
   setPdfTitle(title);
@@ -729,6 +730,7 @@ function showPaperPdf(paperId, title) {
 // 패널 폭 변경 시 PDF가 다시 맞춰진다. (ArrayBuffer는 pdf.js가 detach 해버려 재사용 불가)
 function showLocalPdf(file) {
   if (!pdfViewer) return;
+  pdfViewer.setFigureCandidates?.(true); // 분석(미리보기) 모드
   clearPdfSelection();
   revokePdfBlob();
   setPdfTitle(file.name || '논문');
@@ -2258,6 +2260,7 @@ async function sendLatexChat() {
 // 컴파일 결과 PDF 를 우측 패널(PDF.js)에 로드. 컴파일 전이면 빈 상태로 패널만 연다.
 function showProjectPdf(projectId, hasPdf = true) {
   if (!pdfViewer) return;
+  pdfViewer.setFigureCandidates?.(false); // LaTeX 결과엔 figure 클릭-분석 박스 숨김
   revokePdfBlob();
   setPdfTitle('컴파일 결과');
   pdfState.paperId = null;
