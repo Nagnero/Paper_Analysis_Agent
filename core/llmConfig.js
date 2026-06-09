@@ -6,7 +6,7 @@ const ROLES = [
   // 분석팀 공용 — 근거 탐색(작성팀에서도 사용)
   'evidence',
   // 논문 작성팀 (본문/그림은 계획→작성→검토 멀티에이전트)
-  'writeOrchestrator', 'writePlan', 'writeBody', 'writeFigure', 'writeReview', 'writeCitation', 'writeCompile',
+  'writeOrchestrator', 'scopeLocator', 'writePlan', 'writeBody', 'writeFigure', 'writeReview', 'writeCitation', 'writeCompile',
 ];
 
 export const CODEX_MODELS = Object.freeze(['gpt-5.5', 'gpt-5.4']);
@@ -49,9 +49,14 @@ function codexConfig(reasoningEffort = DEFAULT_CODEX_REASONING_EFFORT, model = C
 }
 
 function makeDefaults(backend = 'claude') {
-  return Object.fromEntries(
+  const out = Object.fromEntries(
     ROLES.map(role => [role, backend === 'codex' ? codexConfig() : claudeConfig()])
   );
+  // 범위 지정은 위치만 찾는 가벼운 작업 — 토큰 절약 위해 기본은 빠르고 저렴한 Haiku
+  if (backend !== 'codex' && out.scopeLocator) {
+    out.scopeLocator = claudeConfig('claude-haiku-4-5-20251001', '');
+  }
+  return out;
 }
 
 const DEFAULTS = Object.freeze(makeDefaults('claude'));

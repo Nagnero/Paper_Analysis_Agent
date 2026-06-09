@@ -134,8 +134,9 @@ export async function createLatexEditor(container) {
       if (!diffEditor) {
         diffEditor = monaco.editor.createDiffEditor(diffContainer, {
           theme: 'vs-dark', automaticLayout: true, readOnly: true, originalEditable: false,
-          fontSize: 13, renderSideBySide: true, minimap: { enabled: false },
-          wordWrap: 'on', scrollBeyondLastLine: false, ignoreTrimWhitespace: false,
+          fontSize: 13, renderSideBySide: false, // 인라인(초록=추가/빨강=삭제) 통합 diff
+          minimap: { enabled: false }, wordWrap: 'on', scrollBeyondLastLine: false,
+          ignoreTrimWhitespace: false, renderMarginRevertIcon: false,
         });
       }
       const lang = langForPath(path);

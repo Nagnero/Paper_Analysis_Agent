@@ -73,6 +73,32 @@ const MODULE_MAP = {
   citation: { prompt: 'writeCitation', role: 'writeCitation' },
 };
 
+// 범위 지정: 지시가 국소적이면 수정할 줄 범위만 찾아 반환(토큰 절약).
+// 짧은 파일/모호한 지시/실패 시 'whole' 로 폴백.
+const SCOPE_MIN_LINES = 60;
+async function locateScope(content, instruction) {
+  const lines = content.split('\n');
+  if (lines.length < SCOPE_MIN_LINES) return { scope: 'whole' };
+  const prompts = await getPrompts();
+  if (!prompts.scopeLocator) return { scope: 'whole' };
+  const numbered = lines.map((l, i) => `${i + 1}\t${l}`).join('\n');
+  const role = llmConfig.getRole('scopeLocator');
+  try {
+    const out = await callLLM(fillTemplate(prompts.scopeLocator, { numberedContent: numbered, instruction }), {
+      backend: role.backend, model: role.model, reasoningEffort: role.reasoningEffort, timeoutMs: 120_000,
+    });
+    const j = JSON.parse(stripFence(out));
+    if (j.scope === 'range') {
+      const s = parseInt(j.startLine, 10);
+      const e = parseInt(j.endLine, 10);
+      if (Number.isFinite(s) && Number.isFinite(e) && s >= 1 && e >= s && e <= lines.length) {
+        return { scope: 'range', startLine: s, endLine: e };
+      }
+    }
+  } catch { /* 폴백 */ }
+  return { scope: 'whole' };
+}
+
 // Planner: 텍스트 계획 반환(코드블록 없음)
 async function planStep(moduleType, fileName, content, instruction) {
   const prompts = await getPrompts();
@@ -139,7 +165,23 @@ export async function runPaperWriting({ projectId, file, mainFile, instruction, 
     const bibKeys = (await collectBibKeys(projectId)).join(', ') || '(없음)';
     edit = await runModule('writeCitation', 'writeCitation', { fileName: file, content, instruction: refined, bibKeys });
   } else {
-    edit = await multiAgentEdit({ module, fileName: file, content, instruction: refined, onStep });
+    // 범위 지정: 특정 부분만 수정하면 그 슬라이스만 보고 작성(토큰 절약)
+    const sc = await locateScope(content, refined);
+    if (sc.scope === 'range') {
+      onStep({ stage: 'scope', label: `🎯 ${sc.startLine}–${sc.endLine}줄만 수정 (범위 한정)` });
+      const lines = content.split('\n');
+      const slice = lines.slice(sc.startLine - 1, sc.endLine).join('\n');
+      const excerptNote =
+        `아래 내용은 더 큰 .tex 파일의 ${sc.startLine}–${sc.endLine}줄 "발췌"입니다. ` +
+        `이 발췌 범위만 수정해서 발췌 전체를(수정 반영해) 그대로 반환하세요. ` +
+        `프리앰블·\\begin{document}·문서 구조를 새로 추가하지 말고, 발췌 밖은 건드리지 마세요.\n\n${refined}`;
+      const ed = await multiAgentEdit({ module, fileName: file, content: slice, instruction: excerptNote, onStep });
+      const editedLines = ed.content.replace(/\n+$/, '').split('\n');
+      const newLines = [...lines.slice(0, sc.startLine - 1), ...editedLines, ...lines.slice(sc.endLine)];
+      edit = { content: newLines.join('\n') + (content.endsWith('\n') ? '\n' : ''), note: `[${sc.startLine}–${sc.endLine}줄] ${ed.note}` };
+    } else {
+      edit = await multiAgentEdit({ module, fileName: file, content, instruction: refined, onStep });
+    }
   }
   await latexProject.writeProjectFile(projectId, file, edit.content);
 
