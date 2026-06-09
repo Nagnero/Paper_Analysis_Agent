@@ -54,9 +54,15 @@ async function collectBibKeys(projectId) {
   return [...new Set(keys)];
 }
 
-// 프로젝트의 모든 .tex 내용을 합쳐 반환(근거 탐색용 문서 텍스트)
-async function collectProjectText(projectId) {
-  const files = (await latexProject.listFiles(projectId)).filter(f => /\.tex$/i.test(f.path));
+// 프로젝트의 모든 .tex 내용을 합쳐 반환(근거 탐색용 문서 텍스트).
+// 메인 파일을 맨 앞에 둬서, journalnames.tex 같은 긴 보일러플레이트가 본문을 밀어내지 않게 한다.
+async function collectProjectText(projectId, mainFile) {
+  const files = (await latexProject.listFiles(projectId)).filter(f => !f.dir && /\.tex$/i.test(f.path));
+  files.sort((a, b) => {
+    const am = a.path === mainFile ? 0 : 1;
+    const bm = b.path === mainFile ? 0 : 1;
+    return am - bm || a.path.localeCompare(b.path);
+  });
   let txt = '';
   for (const f of files) {
     try {
@@ -136,13 +142,13 @@ const MODLABEL = { writing: '✍️ 본문', figure: '📊 그림·표', citatio
 const MAX_STEPS = 4;
 
 // 웹 리서치 1회 → 답변 텍스트. 준 URL을 WebFetch로 읽음(claude 웹도구).
-async function runResearchStep(projectId, rawInstruction, stepInstruction) {
+async function runResearchStep(projectId, rawInstruction, stepInstruction, mainFile) {
   const urlSet = new Set();
   for (const src of [rawInstruction, stepInstruction]) {
     for (const m of (String(src || '').match(/https?:\/\/[^\s)>\]]+/g) || [])) urlSet.add(m);
   }
   const urls = [...urlSet];
-  const docText = (await collectProjectText(projectId)).slice(0, 40000);
+  const docText = (await collectProjectText(projectId, mainFile)).slice(0, 60000);
   const prompts = await getPrompts();
   const role = llmConfig.getRole('research');
   const useClaude = role.backend === 'claude';
@@ -230,13 +236,13 @@ export async function runPaperWriting({ projectId, file, mainFile, instruction, 
     const tag = steps.length > 1 ? `(${i + 1}/${steps.length}) ` : '';
     if (st.module === 'evidence') {
       onStep({ stage: 'step', label: `${tag}🔎 근거 탐색…` });
-      const docText = await collectProjectText(projectId);
+      const docText = await collectProjectText(projectId, mainFile);
       const ans = await findEvidence({ documentText: docText, question: st.instruction });
       readOnlyAnswers.push(`🔎 [근거 탐색]\n${ans}`);
       priorContext += `\n[근거 탐색 결과] ${ans}\n`;
     } else if (st.module === 'research') {
       onStep({ stage: 'step', label: `${tag}🌐 웹 리서치…` });
-      const ans = await runResearchStep(projectId, instruction, st.instruction);
+      const ans = await runResearchStep(projectId, instruction, st.instruction, mainFile);
       readOnlyAnswers.push(`🌐 [웹 리서치]\n${ans}`);
       priorContext += `\n[웹 리서치 결과] ${ans}\n`;
     } else {

@@ -5,7 +5,7 @@ import { callLLM } from '../core/llm.js';
 import * as llmConfig from '../core/llmConfig.js';
 import { getCurrent as getPrompts, fillTemplate } from '../core/promptStore.js';
 
-const MAX_DOC_CHARS = 120000;
+const MAX_DOC_CHARS = 400000; // ~100k 토큰 (모델 200k 컨텍스트 내) — 본문이 잘려나가지 않게 충분히
 
 /**
  * 문서에서 질문에 대한 근거를 찾아 한국어 답변을 반환.
