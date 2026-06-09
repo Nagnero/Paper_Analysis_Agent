@@ -421,6 +421,8 @@ const state = {
   currentProjectId: null,
   currentLatexFile: null,
   latexPreview: null,
+  latexChatHistory: [],
+  latexDiffPending: null,
   latexFiles: [],
   latexProjects: [],
   latexDirty: false,
@@ -484,6 +486,10 @@ const latexEditorHost = $('latexEditorHost');
 const latexAssetView = $('latexAssetView');
 const latexUploadBtn = $('latexUploadBtn');
 const latexAssetInput = $('latexAssetInput');
+const latexDiffHost = $('latexDiffHost');
+const latexDiffBar = $('latexDiffBar');
+const latexDiffKeep = $('latexDiffKeep');
+const latexDiffRevert = $('latexDiffRevert');
 const latexLog = $('latexLog');
 const latexLogBody = $('latexLogBody');
 const latexLogClose = $('latexLogClose');
@@ -493,6 +499,9 @@ const zipInput = $('zipInput');
 const latexChatLog = $('latexChatLog');
 const latexChatInput = $('latexChatInput');
 const latexChatSend = $('latexChatSend');
+const latexChatResizer = $('latexChatResizer');
+const latexChatClear = $('latexChatClear');
+const LATEX_CHAT_H_KEY = 'paa.latexChatLogH';
 const chatMainEl = document.querySelector('.chat-main');
 const settingsModal = $('settingsModal');
 const savePromptsBtn = $('savePromptsBtn');
@@ -507,13 +516,13 @@ const PROMPT_FIELDS = {
   // 분석팀 공용 — 근거 탐색(작성팀에서도 사용)
   evidence: $('promptEvidence'),
   // 논문 작성팀 (본문/그림은 계획→작성→검토 멀티에이전트)
-  writeOrchestrator: $('promptWriteOrchestrator'), writePlan: $('promptWritePlan'),
+  writeOrchestrator: $('promptWriteOrchestrator'), scopeLocator: $('promptScopeLocator'), writePlan: $('promptWritePlan'),
   writeBody: $('promptWriteBody'), writeFigure: $('promptWriteFigure'), writeReview: $('promptWriteReview'),
   writeCitation: $('promptWriteCitation'), writeCompile: $('promptWriteCompile'),
 };
 const LLM_ROLES = [
   'orchestrator', 'analyst', 'verifier', 'writer', 'coreInsight', 'chat', 'evidence',
-  'writeOrchestrator', 'writePlan', 'writeBody', 'writeFigure', 'writeReview', 'writeCitation', 'writeCompile',
+  'writeOrchestrator', 'scopeLocator', 'writePlan', 'writeBody', 'writeFigure', 'writeReview', 'writeCitation', 'writeCompile',
 ];
 const saveLlmBtn = $('saveLlmBtn');
 const resetLlmBtn = $('resetLlmBtn');
@@ -537,7 +546,8 @@ const pdfSelectBtn = $('pdfSelectBtn');
 const paneResizer = $('paneResizer');
 const pdfTitleEl = $('pdfTitle');
 const pdfOpenExternal = $('pdfOpenExternal');
-const PDF_WIDTH_KEY = 'paa.pdfPaneWidth';
+// 비율(0~1)로 저장 → 창 크기가 바뀌어도 PDF:편집기 비율 유지. 기본 5:5.
+const PDF_RATIO_KEY = 'paa.pdfPaneRatio';
 
 const pdfViewer = pdfBody ? createPdfViewer(pdfBody) : null;
 const selectionChip = $('selectionChip');
@@ -648,16 +658,43 @@ function setPdfSelectionMode(enabled) {
   setComposerHint(active ? 'PDF에서 질문할 영역을 드래그하세요.' : '');
 }
 
+function workspaceWidth() {
+  return (workspaceEl ? workspaceEl.clientWidth : window.innerWidth) || window.innerWidth;
+}
+
 function clampPdfWidth(px) {
-  const total = workspaceEl ? workspaceEl.clientWidth : window.innerWidth;
+  const total = workspaceWidth();
   const min = 280;
   const max = Math.max(min, total - 360); // 채팅 영역 최소 360px 보장
   return Math.min(Math.max(px, min), max);
 }
 
-function setPdfWidth(px) {
-  if (pdfPane) pdfPane.style.width = clampPdfWidth(px) + 'px';
+// PDF 패널 폭을 "비율"로 관리 → 창 크기가 바뀌어도 비율 유지(전체화면 전환 등).
+let pdfRatio = (() => {
+  try { const r = Number(localStorage.getItem(PDF_RATIO_KEY)); if (r >= 0.15 && r <= 0.85) return r; } catch { /* ignore */ }
+  return 0.5; // 기본 5:5
+})();
+
+// 현재 비율을 워크스페이스 폭에 맞춰 px 로 적용
+function applyPdfRatio(ratio = pdfRatio) {
+  pdfRatio = Math.min(0.85, Math.max(0.15, ratio));
+  if (pdfPane) pdfPane.style.width = clampPdfWidth(pdfRatio * workspaceWidth()) + 'px';
 }
+
+// 드래그 중: px 로 직접 지정하되 비율도 갱신
+function setPdfWidth(px) {
+  if (!pdfPane) return;
+  const w = clampPdfWidth(px);
+  pdfPane.style.width = w + 'px';
+  pdfRatio = Math.min(0.85, Math.max(0.15, w / workspaceWidth()));
+}
+
+function savePdfRatio() {
+  try { localStorage.setItem(PDF_RATIO_KEY, String(pdfRatio.toFixed(4))); } catch { /* ignore */ }
+}
+
+// PDF 패널 폭 적용(현재 비율 기준; 기본 5:5)
+function ensurePdfWidth() { applyPdfRatio(pdfRatio); }
 
 // 저장된 논문 PDF를 서버에서 로드. title 생략 시 기존 제목 유지.
 function showPaperPdf(paperId, title) {
@@ -670,6 +707,7 @@ function showPaperPdf(paperId, title) {
   pdfState.paperId = paperId;
   pdfState.available = true;
   pdfState.open = true;
+  ensurePdfWidth(); // 기본 5:5 (load 전에 폭을 맞춰 렌더 스케일이 작아지지 않게)
   applyPdfLayout();
   // 같은 논문을 다시 열면 재로드 생략(깜빡임 방지)
   if (pdfViewer.currentPaperId !== paperId) {
@@ -678,6 +716,7 @@ function showPaperPdf(paperId, title) {
       .then(() => rerenderEvidenceMessages())
       .catch(err => console.warn('PDF 로드 실패', err));
   } else if (pdfViewer.isLoaded()) {
+    pdfViewer.relayout();
     rerenderEvidenceMessages();
   }
 }
@@ -696,6 +735,7 @@ function showLocalPdf(file) {
   pdfViewer.currentPaperId = null;
   pdfState.available = true;
   pdfState.open = true;
+  ensurePdfWidth(); // 기본 5:5
   applyPdfLayout();
   pdfViewer.load(pdfState.blobUrl)
     .then(() => rerenderEvidenceMessages())
@@ -789,12 +829,12 @@ if (paneResizer) {
     const startX = e.clientX;
     const startW = pdfPane.getBoundingClientRect().width;
     document.body.classList.add('resizing');
-    const onMove = (ev) => setPdfWidth(startW + (startX - ev.clientX)); // 좌로 끌면 넓어짐
+    const onMove = (ev) => setPdfWidth(startW + (startX - ev.clientX)); // 좌로 끌면 넓어짐 (비율도 갱신)
     const onUp = () => {
       document.body.classList.remove('resizing');
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
-      try { localStorage.setItem(PDF_WIDTH_KEY, String(Math.round(pdfPane.getBoundingClientRect().width))); } catch { /* ignore */ }
+      savePdfRatio(); // 드래그로 정한 비율 저장 → 다음에도, 창 크기 바뀌어도 유지
       if (pdfViewer) pdfViewer.relayout();
     };
     window.addEventListener('mousemove', onMove);
@@ -804,16 +844,11 @@ if (paneResizer) {
 
 let resizeTimer = 0;
 window.addEventListener('resize', () => {
+  // 창 크기가 바뀌면 즉시 비율을 다시 적용해 PDF:편집기 비율 유지(전체화면 전환 등)
+  if (pdfState.available && pdfState.open) applyPdfRatio();
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => { if (pdfViewer && pdfState.available && pdfState.open) pdfViewer.relayout(); }, 250);
+  resizeTimer = setTimeout(() => { if (pdfViewer && pdfState.available && pdfState.open) pdfViewer.relayout(); }, 200);
 });
-
-// 저장된 패널 폭 복원
-(function initPdfWidth() {
-  let saved = 0;
-  try { saved = Number(localStorage.getItem(PDF_WIDTH_KEY)) || 0; } catch { /* ignore */ }
-  if (saved > 0 && pdfPane) pdfPane.style.width = saved + 'px';
-})();
 
 const CLAUDE_MODELS = [
   { value: 'claude-opus-4-8', label: 'Opus 4.8 (기본값, 최고 성능)' },
@@ -1590,7 +1625,7 @@ function enterLatexMode() {
   // 우측 PDF 패널을 컴파일 결과 전용으로: 분석용 컨트롤 숨기고 절반 폭으로
   if (pdfSelectBtn) pdfSelectBtn.hidden = true;
   if (pdfCloseBtn) pdfCloseBtn.hidden = true;
-  if (pdfPane && workspaceEl) pdfPane.style.width = Math.round(workspaceEl.clientWidth * 0.5) + 'px';
+  applyPdfRatio(); // 현재 비율(기본 5:5)로 적용 — 창 크기 바뀌어도 유지
 }
 
 function exitLatexMode() {
@@ -1668,7 +1703,9 @@ async function openLatexProject(id) {
     state.latexFiles = files || [];
     state.latexDirty = false;
     enterLatexMode();
+    closeLatexDiff();
     showLatexEditorPane();
+    restoreLatexChat(id);
     if (latexTitle) { latexTitle.textContent = project.name || 'LaTeX 프로젝트'; latexTitle.title = project.name || ''; }
     renderLatexFileTree();
     try {
@@ -1760,9 +1797,45 @@ function showLatexEditorPane() {
   if (latexEditor) setTimeout(() => latexEditor.layout(), 0);
 }
 
+// 수정 전/후 diff 비교 열기
+function showLatexDiff(before, after, file) {
+  if (!latexEditor || !latexEditor.showDiff || !latexDiffHost) return;
+  state.latexDiffPending = { before, after, file };
+  if (latexAssetView) latexAssetView.hidden = true;
+  if (latexEditorHost) latexEditorHost.style.display = 'none';
+  latexDiffHost.style.display = '';
+  latexEditor.showDiff(latexDiffHost, file, before, after);
+  if (latexDiffBar) latexDiffBar.hidden = false;
+}
+
+// diff 닫고 일반 에디터로 복귀
+function closeLatexDiff() {
+  state.latexDiffPending = null;
+  if (latexEditor && latexEditor.closeDiff) latexEditor.closeDiff();
+  if (latexDiffHost) latexDiffHost.style.display = 'none';
+  if (latexDiffBar) latexDiffBar.hidden = true;
+  if (latexEditorHost) latexEditorHost.style.display = '';
+  if (latexEditor) setTimeout(() => latexEditor.layout(), 0);
+}
+
+// "되돌리기": 수정 전 내용으로 파일을 되돌리고 재컴파일
+async function revertLatexDiff() {
+  const d = state.latexDiffPending;
+  if (!d || !latexEditor) { closeLatexDiff(); return; }
+  closeLatexDiff();
+  if (d.file !== state.currentLatexFile) { showToast('다른 파일로 이동해 되돌릴 수 없습니다'); return; }
+  latexEditor.setContent(d.file, d.before);
+  state.latexDirty = true;
+  updateLatexSaveState();
+  await saveCurrentLatexFile();
+  await compileLatex();
+  showToast('수정 전으로 되돌렸습니다');
+}
+
 // 이미지 파일 미리보기 (편집 대상은 바뀌지 않음)
 function showLatexImage(filePath) {
   if (!state.currentProjectId || !latexAssetView) return;
+  if (state.latexDiffPending) closeLatexDiff();
   state.latexPreview = filePath;
   if (latexEditorHost) latexEditorHost.style.display = 'none';
   latexAssetView.hidden = false;
@@ -1781,7 +1854,8 @@ function showLatexImage(filePath) {
 
 async function loadLatexFile(filePath) {
   if (!state.currentProjectId) return;
-  if (filePath === state.currentLatexFile && !state.latexPreview) return;
+  if (filePath === state.currentLatexFile && !state.latexPreview && !state.latexDiffPending) return;
+  if (state.latexDiffPending) closeLatexDiff();
   if (state.latexDirty) await saveCurrentLatexFile();
   try {
     const res = await fetch(`/api/library/projects/${state.currentProjectId}/file?path=${encodeURIComponent(filePath)}`);
@@ -1904,13 +1978,61 @@ function appendLatexChat(role, text) {
   return el;
 }
 
+// ---- 작성팀 채팅 로그: 프로젝트별 localStorage 영속 ----
+function latexChatKey(id) { return `paa.latexChat.${id}`; }
+
+function persistLatexChat() {
+  if (!state.currentProjectId) return;
+  try {
+    // 최근 100개만 보관
+    const trimmed = state.latexChatHistory.slice(-100);
+    state.latexChatHistory = trimmed;
+    localStorage.setItem(latexChatKey(state.currentProjectId), JSON.stringify(trimmed));
+  } catch { /* ignore */ }
+}
+
+// 완료된 메시지를 기록(c = 'user' | 'ai' | 'ai error', text = 최종 표시 텍스트)
+function recordLatexChat(c, text) {
+  state.latexChatHistory.push({ c, text });
+  persistLatexChat();
+}
+
+// 프로젝트 열 때 저장된 로그 복원(없으면 비움)
+function restoreLatexChat(projectId) {
+  state.latexChatHistory = [];
+  try {
+    const raw = localStorage.getItem(latexChatKey(projectId));
+    if (raw) state.latexChatHistory = JSON.parse(raw) || [];
+  } catch { state.latexChatHistory = []; }
+  if (!latexChatLog) return;
+  latexChatLog.innerHTML = '';
+  for (const m of state.latexChatHistory) {
+    const el = document.createElement('div');
+    el.className = 'latex-chat-msg ' + (m.c || 'ai');
+    el.textContent = m.text || '';
+    latexChatLog.appendChild(el);
+  }
+  latexChatLog.scrollTop = latexChatLog.scrollHeight;
+}
+
+function clearLatexChat() {
+  state.latexChatHistory = [];
+  if (latexChatLog) latexChatLog.innerHTML = '';
+  if (state.currentProjectId) {
+    try { localStorage.removeItem(latexChatKey(state.currentProjectId)); } catch { /* ignore */ }
+  }
+}
+
 async function sendLatexChat() {
   const instruction = (latexChatInput && latexChatInput.value || '').trim();
   if (!instruction || state.latexChatBusy) return;
   if (!state.currentProjectId || !state.currentLatexFile) { showToast('편집할 파일을 먼저 여세요'); return; }
   state.latexChatBusy = true;
   if (latexChatSend) latexChatSend.disabled = true;
-  appendLatexChat('user', instruction);
+  // 직전까지의 대화(현재 지시 제외)를 함께 보내 맥락 유지 — "그 부분", "알아서 수정" 해석용
+  const historyToSend = state.latexChatHistory.slice(-8).map((h) => ({ c: h.c, text: h.text }));
+  const userEl = appendLatexChat('user', instruction);
+  if (userEl) recordLatexChat('user', userEl.textContent);
   latexChatInput.value = '';
   const pending = appendLatexChat('ai', '🧭 시작…');
   pending.classList.add('working');
@@ -1918,7 +2040,7 @@ async function sendLatexChat() {
     if (state.latexDirty) await saveCurrentLatexFile(); // 현재 편집분 먼저 저장
     const res = await fetch(`/api/library/projects/${state.currentProjectId}/chat-edit`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file: state.currentLatexFile, instruction }),
+      body: JSON.stringify({ file: state.currentLatexFile, instruction, history: historyToSend }),
     });
     if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.error || `HTTP ${res.status}`); }
 
@@ -1949,17 +2071,22 @@ async function sendLatexChat() {
     // 근거 탐색(읽기 전용): 파일·PDF 변경 없이 답변만 표시
     if (final.readOnly) {
       pending.textContent = `🔎 ${final.answer || final.note || '결과 없음'}`;
+      recordLatexChat('ai', pending.textContent);
       latexChatLog.scrollTop = latexChatLog.scrollHeight;
       return;
     }
 
     const moduleLabel = { writing: '✍️ 본문', figure: '📊 그림/표', citation: '📚 인용' }[final.module] || '';
     pending.textContent = `🤖 ${moduleLabel ? '[' + moduleLabel + '] ' : ''}${final.note || '수정 완료'}`;
+    recordLatexChat('ai', pending.textContent);
     if (latexEditor && typeof final.content === 'string' && final.file === state.currentLatexFile) {
       if (state.latexPreview) { showLatexEditorPane(); renderLatexFileTree(); }
+      const beforeContent = latexEditor.getValue();
       latexEditor.setContent(state.currentLatexFile, final.content);
       state.latexDirty = false;
       updateLatexSaveState();
+      // 수정 전/후 비교 뷰 자동 표시(실제 변경이 있을 때만)
+      if (beforeContent !== final.content) showLatexDiff(beforeContent, final.content, state.currentLatexFile);
     }
     showLatexLog(final.log || '');
     setLatexCompileStatus(final.compiled ? 'ok' : 'fail');
@@ -1969,6 +2096,7 @@ async function sendLatexChat() {
     pending.classList.remove('working');
     pending.textContent = '🤖 실패: ' + err.message;
     pending.classList.add('error');
+    recordLatexChat('ai error', pending.textContent);
   } finally {
     state.latexChatBusy = false;
     if (latexChatSend) latexChatSend.disabled = false;
@@ -2325,6 +2453,40 @@ if (latexAssetInput) latexAssetInput.addEventListener('change', async () => {
 if (latexChatSend) latexChatSend.addEventListener('click', sendLatexChat);
 if (latexChatInput) latexChatInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendLatexChat(); }
+});
+if (latexChatClear) latexChatClear.addEventListener('click', () => {
+  if (state.latexChatHistory.length && !confirm('이 프로젝트의 채팅 로그를 지울까요?')) return;
+  clearLatexChat();
+});
+if (latexDiffKeep) latexDiffKeep.addEventListener('click', () => closeLatexDiff());
+if (latexDiffRevert) latexDiffRevert.addEventListener('click', () => revertLatexDiff());
+
+// 채팅 로그 높이: 저장값 복원 + 드래그 리사이즈
+(function initLatexChatHeight() {
+  if (!latexChatLog) return;
+  let saved = 0;
+  try { saved = Number(localStorage.getItem(LATEX_CHAT_H_KEY)) || 0; } catch { /* ignore */ }
+  if (saved > 0) latexChatLog.style.height = saved + 'px';
+})();
+if (latexChatResizer) latexChatResizer.addEventListener('mousedown', (e) => {
+  e.preventDefault();
+  const startY = e.clientY;
+  const startH = latexChatLog.getBoundingClientRect().height;
+  const paneH = (latexPane && latexPane.clientHeight) || 600;
+  const maxH = Math.max(120, Math.round(paneH * 0.6));
+  document.body.classList.add('resizing-chat');
+  const onMove = (ev) => {
+    const h = Math.min(maxH, Math.max(80, startH + (startY - ev.clientY))); // 위로 끌면 커짐
+    latexChatLog.style.height = h + 'px';
+  };
+  const onUp = () => {
+    document.body.classList.remove('resizing-chat');
+    window.removeEventListener('mousemove', onMove);
+    window.removeEventListener('mouseup', onUp);
+    try { localStorage.setItem(LATEX_CHAT_H_KEY, String(Math.round(latexChatLog.getBoundingClientRect().height))); } catch { /* ignore */ }
+  };
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('mouseup', onUp);
 });
 if (latexZipBtn) latexZipBtn.addEventListener('click', () => {
   if (!state.currentProjectId) return;

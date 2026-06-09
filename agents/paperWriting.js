@@ -73,25 +73,62 @@ const MODULE_MAP = {
   citation: { prompt: 'writeCitation', role: 'writeCitation' },
 };
 
+// 작성팀 채팅 기록을 프롬프트용 텍스트로. 최근 8턴, 길면 자른다.
+function formatHistory(history) {
+  if (!Array.isArray(history) || !history.length) return '(이전 대화 없음)';
+  return history.slice(-8).map((h) => {
+    const who = (h.c || h.role) === 'user' ? '사용자' : 'AI';
+    let t = String(h.text || '').replace(/^[\s🧑🤖🔎✗✓🧭🗺️✍️🔍🔧🎯📊📚]+/u, '').trim();
+    if (t.length > 600) t = t.slice(0, 600) + '…';
+    return `${who}: ${t}`;
+  }).join('\n');
+}
+
+// 범위 지정: 지시가 국소적이면 수정할 줄 범위만 찾아 반환(토큰 절약).
+// 짧은 파일/모호한 지시/실패 시 'whole' 로 폴백.
+const SCOPE_MIN_LINES = 60;
+async function locateScope(content, instruction, history = '(이전 대화 없음)') {
+  const lines = content.split('\n');
+  if (lines.length < SCOPE_MIN_LINES) return { scope: 'whole' };
+  const prompts = await getPrompts();
+  if (!prompts.scopeLocator) return { scope: 'whole' };
+  const numbered = lines.map((l, i) => `${i + 1}\t${l}`).join('\n');
+  const role = llmConfig.getRole('scopeLocator');
+  try {
+    const out = await callLLM(fillTemplate(prompts.scopeLocator, { numberedContent: numbered, instruction, history }), {
+      backend: role.backend, model: role.model, reasoningEffort: role.reasoningEffort, timeoutMs: 120_000,
+    });
+    const j = JSON.parse(stripFence(out));
+    if (j.scope === 'range') {
+      const s = parseInt(j.startLine, 10);
+      const e = parseInt(j.endLine, 10);
+      if (Number.isFinite(s) && Number.isFinite(e) && s >= 1 && e >= s && e <= lines.length) {
+        return { scope: 'range', startLine: s, endLine: e };
+      }
+    }
+  } catch { /* 폴백 */ }
+  return { scope: 'whole' };
+}
+
 // Planner: 텍스트 계획 반환(코드블록 없음)
-async function planStep(moduleType, fileName, content, instruction) {
+async function planStep(moduleType, fileName, content, instruction, history = '(이전 대화 없음)') {
   const prompts = await getPrompts();
   const role = llmConfig.getRole('writePlan');
-  const out = await callLLM(fillTemplate(prompts.writePlan, { moduleType, fileName, content, instruction }), {
+  const out = await callLLM(fillTemplate(prompts.writePlan, { moduleType, fileName, content, instruction, history }), {
     backend: role.backend, model: role.model, reasoningEffort: role.reasoningEffort, timeoutMs: 180_000,
   });
   return (out || '').trim();
 }
 
 // 본문/그림 모듈: 계획 → 작성 → 검토 (멀티에이전트, STORM식)
-async function multiAgentEdit({ module, fileName, content, instruction, onStep }) {
+async function multiAgentEdit({ module, fileName, content, instruction, onStep, history = '(이전 대화 없음)' }) {
   const sel = MODULE_MAP[module];
   onStep({ stage: 'plan', label: '🗺️ 계획 수립 중…' });
-  const plan = await planStep(sel.type, fileName, content, instruction);
+  const plan = await planStep(sel.type, fileName, content, instruction, history);
   onStep({ stage: 'write', label: `✍️ ${sel.type} 작성 중…` });
-  const draft = await runModule(sel.prompt, sel.role, { fileName, content, instruction, plan });
+  const draft = await runModule(sel.prompt, sel.role, { fileName, content, instruction, plan, history });
   onStep({ stage: 'review', label: '🔍 검토 중…' });
-  const reviewed = await runModule('writeReview', 'writeReview', { fileName, content: draft.content, instruction, plan });
+  const reviewed = await runModule('writeReview', 'writeReview', { fileName, content: draft.content, instruction, plan, history });
   return { content: reviewed.content, note: `[계획→작성→검토] ${reviewed.note}` };
 }
 
@@ -99,18 +136,19 @@ async function multiAgentEdit({ module, fileName, content, instruction, onStep }
  * @param {{ projectId:number, file:string, mainFile:string, instruction:string }} args
  * @returns {Promise<{module:string, note:string, content:string, file:string, compiled:boolean, fixes:number, log:string}>}
  */
-export async function runPaperWriting({ projectId, file, mainFile, instruction, onStep = () => {} }) {
+export async function runPaperWriting({ projectId, file, mainFile, instruction, history = [], onStep = () => {} }) {
   const content = await latexProject.readProjectFile(projectId, file);
   if (content.length > MAX_CHARS) throw new Error(`파일이 너무 큽니다(${content.length}자, 최대 ${MAX_CHARS}).`);
+  const historyText = formatHistory(history);
 
-  // 1) 오케스트레이터: 모듈 분류 + 지시 다듬기
+  // 1) 오케스트레이터: 모듈 분류 + 지시 다듬기 (이전 대화 참고 — "그 부분", "알아서 수정" 해석)
   let module = 'writing';
   let refined = instruction;
   onStep({ stage: 'orchestrate', label: '🧭 지시 분석·모듈 분류 중…' });
   try {
     const prompts = await getPrompts();
     const orchRole = llmConfig.getRole('writeOrchestrator');
-    const out = await callLLM(fillTemplate(prompts.writeOrchestrator, { fileName: file, instruction }), {
+    const out = await callLLM(fillTemplate(prompts.writeOrchestrator, { fileName: file, instruction, history: historyText }), {
       backend: orchRole.backend, model: orchRole.model, reasoningEffort: orchRole.reasoningEffort, timeoutMs: 120_000,
     });
     const j = JSON.parse(stripFence(out));
@@ -139,7 +177,23 @@ export async function runPaperWriting({ projectId, file, mainFile, instruction, 
     const bibKeys = (await collectBibKeys(projectId)).join(', ') || '(없음)';
     edit = await runModule('writeCitation', 'writeCitation', { fileName: file, content, instruction: refined, bibKeys });
   } else {
-    edit = await multiAgentEdit({ module, fileName: file, content, instruction: refined, onStep });
+    // 범위 지정: 특정 부분만 수정하면 그 슬라이스만 보고 작성(토큰 절약)
+    const sc = await locateScope(content, refined, historyText);
+    if (sc.scope === 'range') {
+      onStep({ stage: 'scope', label: `🎯 ${sc.startLine}–${sc.endLine}줄만 수정 (범위 한정)` });
+      const lines = content.split('\n');
+      const slice = lines.slice(sc.startLine - 1, sc.endLine).join('\n');
+      const excerptNote =
+        `아래 내용은 더 큰 .tex 파일의 ${sc.startLine}–${sc.endLine}줄 "발췌"입니다. ` +
+        `이 발췌 범위만 수정해서 발췌 전체를(수정 반영해) 그대로 반환하세요. ` +
+        `프리앰블·\\begin{document}·문서 구조를 새로 추가하지 말고, 발췌 밖은 건드리지 마세요.\n\n${refined}`;
+      const ed = await multiAgentEdit({ module, fileName: file, content: slice, instruction: excerptNote, onStep, history: historyText });
+      const editedLines = ed.content.replace(/\n+$/, '').split('\n');
+      const newLines = [...lines.slice(0, sc.startLine - 1), ...editedLines, ...lines.slice(sc.endLine)];
+      edit = { content: newLines.join('\n') + (content.endsWith('\n') ? '\n' : ''), note: `[${sc.startLine}–${sc.endLine}줄] ${ed.note}` };
+    } else {
+      edit = await multiAgentEdit({ module, fileName: file, content, instruction: refined, onStep, history: historyText });
+    }
   }
   await latexProject.writeProjectFile(projectId, file, edit.content);
 

@@ -95,6 +95,15 @@ export async function createLatexEditor(container) {
   let saveCb = null;
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => { if (saveCb) saveCb(); });
 
+  // 수정 전/후 비교용 diff 에디터 (지연 생성)
+  let diffEditor = null;
+  function disposeDiffModels() {
+    if (!diffEditor) return;
+    const prev = diffEditor.getModel();
+    diffEditor.setModel(null);
+    if (prev) { prev.original?.dispose?.(); prev.modified?.dispose?.(); }
+  }
+
   return {
     setContent(path, content) {
       suppress = true;
@@ -120,6 +129,26 @@ export async function createLatexEditor(container) {
     layout() { editor.layout(); },
     focus() { editor.focus(); },
     setReadOnly(ro) { editor.updateOptions({ readOnly: !!ro }); },
-    dispose() { editor.dispose(); },
+    // 수정 전(original) ↔ 후(modified) 나란히 비교. diffContainer 는 보이는 상태여야 함.
+    showDiff(diffContainer, path, original, modified) {
+      if (!diffEditor) {
+        diffEditor = monaco.editor.createDiffEditor(diffContainer, {
+          theme: 'vs-dark', automaticLayout: true, readOnly: true, originalEditable: false,
+          fontSize: 13, renderSideBySide: false, // 인라인(초록=추가/빨강=삭제) 통합 diff
+          minimap: { enabled: false }, wordWrap: 'on', scrollBeyondLastLine: false,
+          ignoreTrimWhitespace: false, renderMarginRevertIcon: false,
+        });
+      }
+      const lang = langForPath(path);
+      disposeDiffModels();
+      diffEditor.setModel({
+        original: monaco.editor.createModel(original || '', lang),
+        modified: monaco.editor.createModel(modified || '', lang),
+      });
+      diffEditor.layout();
+    },
+    closeDiff() { disposeDiffModels(); },
+    layoutDiff() { if (diffEditor) diffEditor.layout(); },
+    dispose() { disposeDiffModels(); if (diffEditor) diffEditor.dispose(); editor.dispose(); },
   };
 }

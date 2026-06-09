@@ -854,7 +854,7 @@ async function handlePromptsPut(req, res) {
   const next = { ...current };
   const allowedPromptKeys = [
     'analyst', 'verifier', 'writer', 'orchestrator', 'coreInsight', 'evidence',
-    'writeOrchestrator', 'writePlan', 'writeBody', 'writeFigure', 'writeReview', 'writeCitation', 'writeCompile',
+    'writeOrchestrator', 'scopeLocator', 'writePlan', 'writeBody', 'writeFigure', 'writeReview', 'writeCitation', 'writeCompile',
   ];
   for (const k of allowedPromptKeys) {
     if (k in payload) {
@@ -1201,6 +1201,12 @@ async function handleProjectChatEdit(req, res, id) {
   const instruction = typeof body.instruction === 'string' ? body.instruction.trim() : '';
   if (!instruction) return jsonResponse(res, 400, { error: 'instruction required' });
   if (instruction.length > 8000) return jsonResponse(res, 413, { error: '지시가 너무 깁니다 (최대 8000자).' });
+  // 이전 대화(작성팀 채팅 로그) — "그 부분", "알아서 수정" 등 맥락 해석용. 최근 8턴만.
+  const history = Array.isArray(body.history)
+    ? body.history.slice(-8)
+        .filter((h) => h && typeof h.text === 'string')
+        .map((h) => ({ c: h.c === 'user' ? 'user' : 'ai', text: String(h.text).slice(0, 1500) }))
+    : [];
 
   // 인증 게이트: 작성팀 오케스트레이터 역할의 백엔드 기준
   const auth = await authStatus.checkAll();
@@ -1215,7 +1221,7 @@ async function handleProjectChatEdit(req, res, id) {
   startSse(res);
   try {
     const result = await runPaperWriting({
-      projectId: id, file, mainFile: project.main_file, instruction,
+      projectId: id, file, mainFile: project.main_file, instruction, history,
       onStep: (ev) => sseWrite(res, ev),
     });
     await library.touchProject(id).catch(() => {});
