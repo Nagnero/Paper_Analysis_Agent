@@ -345,6 +345,13 @@
               <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="writeCompile">기본값으로 채우기 (저장 필요)</button></div>
             </div>
           </details>
+          <details class="team-agent">
+            <summary>리서치 (웹) — 준 URL/저널 스코프를 읽어 논문 방향 제안 (Claude 웹, 읽기 전용)</summary>
+            <div class="team-agent-body">
+              <textarea id="promptResearch" spellcheck="false"></textarea>
+              <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="research">기본값으로 채우기 (저장 필요)</button></div>
+            </div>
+          </details>
         </div>
         <!-- 작성팀 · 모델 -->
         <div class="settings-pane" data-team="writing" data-section="model">
@@ -393,6 +400,12 @@
           </div>
           <div class="llm-row" data-role="writeCompile">
             <label>컴파일 수정</label>
+            <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
+            <select class="llm-model"></select>
+            <select class="llm-reasoning"></select>
+          </div>
+          <div class="llm-row" data-role="research">
+            <label>리서치 (웹)</label>
             <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
             <select class="llm-model"></select>
             <select class="llm-reasoning"></select>

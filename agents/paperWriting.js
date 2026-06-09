@@ -152,11 +152,11 @@ export async function runPaperWriting({ projectId, file, mainFile, instruction, 
       backend: orchRole.backend, model: orchRole.model, reasoningEffort: orchRole.reasoningEffort, timeoutMs: 120_000,
     });
     const j = JSON.parse(stripFence(out));
-    if (['writing', 'figure', 'citation', 'evidence'].includes(j.module)) module = j.module;
+    if (['writing', 'figure', 'citation', 'evidence', 'research'].includes(j.module)) module = j.module;
     if (typeof j.refinedInstruction === 'string' && j.refinedInstruction.trim()) refined = j.refinedInstruction.trim();
   } catch { /* 분류 실패 → writing + 원지시 */ }
 
-  const moduleLabel = { writing: '✍️ 본문', figure: '📊 그림/표', citation: '📚 인용', evidence: '🔎 근거 탐색' }[module] || module;
+  const moduleLabel = { writing: '✍️ 본문', figure: '📊 그림/표', citation: '📚 인용', evidence: '🔎 근거 탐색', research: '🌐 웹 리서치' }[module] || module;
   onStep({ stage: 'route', label: `🧭 ${moduleLabel} 모듈로 처리`, module });
 
   // 근거 탐색(읽기 전용): 파일 수정·컴파일 없이 프로젝트 .tex에서 답만 찾는다.
@@ -168,6 +168,37 @@ export async function runPaperWriting({ projectId, file, mainFile, instruction, 
       module, readOnly: true, answer, note: answer, file,
       content, compiled: null, fixes: 0, log: '',
     };
+  }
+
+  // 웹 리서치(읽기 전용): 준 URL을 WebFetch로 읽고(없으면 WebSearch) 방향을 제안. 웹 도구는 claude만.
+  if (module === 'research') {
+    onStep({ stage: 'research', label: '🌐 웹 자료 읽는 중…' });
+    const urlSet = new Set();
+    for (const m of (instruction.match(/https?:\/\/[^\s)>\]]+/g) || [])) urlSet.add(m);
+    for (const m of (refined.match(/https?:\/\/[^\s)>\]]+/g) || [])) urlSet.add(m);
+    const urls = [...urlSet];
+    const docText = (await collectProjectText(projectId)).slice(0, 40000);
+    const prompts = await getPrompts();
+    const role = llmConfig.getRole('research');
+    const useClaude = role.backend === 'claude';
+    let answer;
+    try {
+      answer = await callLLM(fillTemplate(prompts.research, {
+        urls: urls.length ? urls.join('\n') : '(URL 없음 — 필요하면 WebSearch로 검색)',
+        document: docText || '(논문 내용 없음)',
+        question: refined,
+      }), {
+        backend: 'claude', // 웹(WebFetch/WebSearch)은 claude 백엔드에서만
+        model: useClaude ? role.model : undefined,
+        reasoningEffort: useClaude ? role.reasoningEffort : undefined,
+        allowedTools: ['WebFetch', 'WebSearch'],
+        timeoutMs: 300_000,
+      });
+    } catch (err) {
+      answer = `웹 리서치에 실패했습니다: ${err.message}\n(claude 로그인 및 웹 도구 사용 가능 여부를 확인하세요.)`;
+    }
+    answer = (answer || '').trim();
+    return { module, readOnly: true, answer, note: answer, file, content, compiled: null, fixes: 0, log: '' };
   }
 
   // 2) 모듈 실행 — 본문/그림은 멀티에이전트(계획→작성→검토), 인용은 단일

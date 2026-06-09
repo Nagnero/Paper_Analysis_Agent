@@ -854,7 +854,7 @@ async function handlePromptsPut(req, res) {
   const next = { ...current };
   const allowedPromptKeys = [
     'analyst', 'verifier', 'writer', 'orchestrator', 'coreInsight', 'evidence',
-    'writeOrchestrator', 'scopeLocator', 'writePlan', 'writeBody', 'writeFigure', 'writeReview', 'writeCitation', 'writeCompile',
+    'writeOrchestrator', 'scopeLocator', 'writePlan', 'writeBody', 'writeFigure', 'writeReview', 'writeCitation', 'writeCompile', 'research',
   ];
   for (const k of allowedPromptKeys) {
     if (k in payload) {
