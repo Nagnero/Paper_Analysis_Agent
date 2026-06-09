@@ -3,7 +3,7 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { unzipSync, zipSync } from 'fflate';
-import { projectSrcDir, ensureDir } from './fileManager.js';
+import { projectSrcDir, projectDir, ensureDir } from './fileManager.js';
 
 const MAX_FILES = 3000;
 const MAX_TOTAL_BYTES = 120 * 1024 * 1024; // 해제 후 총량 상한
@@ -213,6 +213,26 @@ export async function createProjectFile(projectId, relPath) {
   await ensureDir(path.dirname(abs));
   await fs.writeFile(abs, '', 'utf8');
   return rel.replace(/\\/g, '/');
+}
+
+// 작성팀 채팅 로그 — 프로젝트 디렉터리에 영구 저장(src 밖이라 파일트리·zip에 안 들어감).
+const CHAT_FILE = 'chat.json';
+export async function readProjectChat(projectId) {
+  try {
+    const raw = await fs.readFile(path.join(projectDir(projectId), CHAT_FILE), 'utf8');
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch { return []; }
+}
+export async function writeProjectChat(projectId, chats) {
+  const arr = (Array.isArray(chats) ? chats : [])
+    .filter(m => m && typeof m.text === 'string')
+    .map(m => ({ c: m.c === 'user' ? 'user' : (m.c === 'ai error' ? 'ai error' : 'ai'), text: String(m.text).slice(0, 8000) }))
+    .slice(-200);
+  const dir = projectDir(projectId);
+  await ensureDir(dir);
+  await fs.writeFile(path.join(dir, CHAT_FILE), JSON.stringify(arr), 'utf8');
+  return arr.length;
 }
 
 // 새 폴더 생성. 이미 있으면 거부. 경로탈출 차단.

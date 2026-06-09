@@ -1316,6 +1316,30 @@ async function handleProjectFileCreate(req, res, id) {
   }
 }
 
+// 작성팀 채팅 로그 읽기/저장 (디스크 영구 — 랜덤 포트로 localStorage가 초기화돼도 유지)
+async function handleProjectChatGet(req, res, id) {
+  try {
+    const project = await library.getProject(id);
+    if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+    const chats = await latexProject.readProjectChat(id);
+    jsonResponse(res, 200, { chats });
+  } catch (err) {
+    jsonResponse(res, 500, { error: err.message });
+  }
+}
+
+async function handleProjectChatPut(req, res, id) {
+  try {
+    const project = await library.getProject(id);
+    if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+    const body = await readJsonBody(req, { maxBytes: 2 * 1024 * 1024 });
+    await latexProject.writeProjectChat(id, Array.isArray(body.chats) ? body.chats : []);
+    jsonResponse(res, 200, { ok: true });
+  } catch (err) {
+    jsonResponse(res, 400, { error: err.message });
+  }
+}
+
 // 새 폴더 생성(빈 공간/폴더 우클릭 → 새 폴더)
 async function handleProjectFolderCreate(req, res, id) {
   try {
@@ -1444,6 +1468,8 @@ function handleProjectsDispatch(req, res) {
   if (sub === '/zip' && req.method === 'GET') return handleProjectZip(req, res, id);
   if (sub === '/synctex' && req.method === 'GET') return handleProjectSynctex(req, res, id, u.searchParams);
   if (sub === '/compile' && req.method === 'POST') return handleProjectCompile(req, res, id);
+  if (sub === '/chat' && req.method === 'GET') return handleProjectChatGet(req, res, id);
+  if (sub === '/chat' && req.method === 'PUT') return handleProjectChatPut(req, res, id);
   if (sub === '/chat-edit' && req.method === 'POST') return handleProjectChatEdit(req, res, id);
   if (sub === '/file' && req.method === 'GET') return handleProjectFileGet(req, res, id, u.searchParams.get('path'));
   if (sub === '/file' && req.method === 'POST') return handleProjectFileCreate(req, res, id);

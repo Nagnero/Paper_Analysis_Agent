@@ -1708,7 +1708,7 @@ async function openLatexProject(id) {
     enterLatexMode();
     closeLatexDiff();
     showLatexEditorPane();
-    restoreLatexChat(id);
+    restoreLatexChat(id); // 서버에서 비동기 복원(렌더는 완료 시)
     if (latexTitle) { latexTitle.textContent = project.name || 'LaTeX 프로젝트'; latexTitle.title = project.name || ''; }
     renderLatexFileTree();
     try {
@@ -2096,17 +2096,16 @@ function appendLatexChat(role, text) {
   return el;
 }
 
-// ---- 작성팀 채팅 로그: 프로젝트별 localStorage 영속 ----
-function latexChatKey(id) { return `paa.latexChat.${id}`; }
-
+// ---- 작성팀 채팅 로그: 서버(디스크)에 프로젝트별 영속 ----
+// 앱이 매번 랜덤 포트로 떠서 origin이 바뀌면 localStorage가 초기화되므로, 서버에 저장해 영구 보존.
 function persistLatexChat() {
   if (!state.currentProjectId) return;
-  try {
-    // 최근 100개만 보관
-    const trimmed = state.latexChatHistory.slice(-100);
-    state.latexChatHistory = trimmed;
-    localStorage.setItem(latexChatKey(state.currentProjectId), JSON.stringify(trimmed));
-  } catch { /* ignore */ }
+  const id = state.currentProjectId;
+  const chats = state.latexChatHistory.slice(-200);
+  state.latexChatHistory = chats;
+  fetch(`/api/library/projects/${id}/chat`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chats }),
+  }).catch(() => { /* 저장 실패는 조용히 무시 */ });
 }
 
 // 완료된 메시지를 기록(c = 'user' | 'ai' | 'ai error', text = 최종 표시 텍스트)
@@ -2115,13 +2114,7 @@ function recordLatexChat(c, text) {
   persistLatexChat();
 }
 
-// 프로젝트 열 때 저장된 로그 복원(없으면 비움)
-function restoreLatexChat(projectId) {
-  state.latexChatHistory = [];
-  try {
-    const raw = localStorage.getItem(latexChatKey(projectId));
-    if (raw) state.latexChatHistory = JSON.parse(raw) || [];
-  } catch { state.latexChatHistory = []; }
+function renderLatexChatHistory() {
   if (!latexChatLog) return;
   latexChatLog.innerHTML = '';
   for (const m of state.latexChatHistory) {
@@ -2133,12 +2126,24 @@ function restoreLatexChat(projectId) {
   latexChatLog.scrollTop = latexChatLog.scrollHeight;
 }
 
+// 프로젝트 열 때 서버에서 저장된 로그 복원(없으면 비움)
+async function restoreLatexChat(projectId) {
+  state.latexChatHistory = [];
+  renderLatexChatHistory(); // 이전 프로젝트 로그 즉시 지움
+  try {
+    const res = await fetch(`/api/library/projects/${projectId}/chat`);
+    if (res.ok) {
+      const j = await res.json();
+      if (Array.isArray(j.chats)) state.latexChatHistory = j.chats;
+    }
+  } catch { /* ignore */ }
+  if (state.currentProjectId === projectId) renderLatexChatHistory();
+}
+
 function clearLatexChat() {
   state.latexChatHistory = [];
   if (latexChatLog) latexChatLog.innerHTML = '';
-  if (state.currentProjectId) {
-    try { localStorage.removeItem(latexChatKey(state.currentProjectId)); } catch { /* ignore */ }
-  }
+  persistLatexChat(); // 서버에도 빈 로그 저장
 }
 
 async function sendLatexChat() {
