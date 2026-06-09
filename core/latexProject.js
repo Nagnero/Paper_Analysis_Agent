@@ -8,15 +8,18 @@ import { projectSrcDir, ensureDir } from './fileManager.js';
 const MAX_FILES = 3000;
 const MAX_TOTAL_BYTES = 120 * 1024 * 1024; // 해제 후 총량 상한
 const EDITABLE_EXT = new Set(['.tex', '.bib', '.cls', '.sty', '.txt', '.md', '.def', '.ltx', '.tikz']);
-// in-place 컴파일 산출물 — 파일 트리에서 숨긴다.
+// in-place 컴파일 산출물 — 파일 트리에서 숨긴다. (.pdf는 그림일 수 있어 제외 — 컴파일 출력 pdf만
+// listFiles에서 별도로 숨긴다.)
 const ARTIFACT_EXT = new Set([
   '.aux', '.log', '.out', '.bbl', '.blg', '.bcf', '.toc', '.lof', '.lot',
   '.fls', '.fdb_latexmk', '.synctex', '.gz', '.nav', '.snm', '.vrb', '.xdv',
-  '.dvi', '.idx', '.ind', '.ilg', '.run.xml', '.pdf',
+  '.dvi', '.idx', '.ind', '.ilg', '.run.xml',
 ]);
 
-// 미리보기(이미지) 가능 + 업로드 허용 자산 확장자
+// 미리보기 가능한 래스터 이미지(=업로드 허용 자산)
 const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg']);
+// 그림으로 쓰이지만 <img>로 미리보기 안 되는 형식(트리에는 보여줌)
+const GRAPHIC_OTHER_EXT = new Set(['.eps', '.ps', '.tif', '.tiff']);
 const MAX_ASSET_BYTES = 20 * 1024 * 1024; // 업로드 1파일 상한
 
 export function isEditablePath(rel) {
@@ -27,15 +30,20 @@ export function isImagePath(rel) {
   return IMAGE_EXT.has(path.extname(rel).toLowerCase());
 }
 
+export function isPdfPath(rel) {
+  return path.extname(rel).toLowerCase() === '.pdf';
+}
+
 // 업로드(드래그/선택)로 추가 가능한 자산 — 현재는 이미지
 export function isUploadableAsset(rel) {
   return IMAGE_EXT.has(path.extname(rel).toLowerCase());
 }
 
-// 파일 종류: 'text'(편집 가능) | 'image'(미리보기) | 'other'(읽기 전용)
+// 파일 종류: 'text'(편집) | 'image'(래스터 미리보기) | 'pdf'(미리보기) | 'other'(목록만)
 export function fileKind(rel) {
   if (isEditablePath(rel)) return 'text';
   if (isImagePath(rel)) return 'image';
+  if (isPdfPath(rel)) return 'pdf';
   return 'other';
 }
 
@@ -133,10 +141,10 @@ export async function detectMainTex(projectId, knownFiles = null) {
   return texFiles.find(f => /(^|\/)main\.tex$/i.test(f)) || texFiles[0];
 }
 
-// 소스 트리 평탄 목록. 각 항목 { path(상대,posix), size, editable, dir }
+// 소스 트리 평탄 목록. 각 항목 { path(상대,posix), size, editable, kind }
 export async function listFiles(projectId) {
   const srcDir = projectSrcDir(projectId);
-  const out = [];
+  const raw = []; // { path, size }
   async function walk(absDir, relDir) {
     let entries;
     try { entries = await fs.readdir(absDir, { withFileTypes: true }); }
@@ -144,13 +152,19 @@ export async function listFiles(projectId) {
     for (const e of entries) {
       const rel = relDir ? `${relDir}/${e.name}` : e.name;
       if (e.isDirectory()) { await walk(path.join(absDir, e.name), rel); continue; }
-      if (isArtifactPath(rel)) continue; // 컴파일 산출물 숨김
+      if (isArtifactPath(rel)) continue; // 컴파일 산출물 숨김(.pdf 제외)
       let size = 0;
       try { size = (await fs.stat(path.join(absDir, e.name))).size; } catch { /* ignore */ }
-      out.push({ path: rel, size, editable: isEditablePath(rel), kind: fileKind(rel) });
+      raw.push({ path: rel, size });
     }
   }
   await walk(srcDir, '');
+
+  // 같은 폴더에 동명의 .tex 가 있는 .pdf 는 "컴파일 출력물"로 보고 숨긴다(그림 pdf는 표시).
+  const texBases = new Set(raw.filter(f => /\.tex$/i.test(f.path)).map(f => f.path.replace(/\.tex$/i, '')));
+  const out = raw
+    .filter(f => !(isPdfPath(f.path) && texBases.has(f.path.replace(/\.pdf$/i, ''))))
+    .map(f => ({ path: f.path, size: f.size, editable: isEditablePath(f.path), kind: fileKind(f.path) }));
   out.sort((a, b) => a.path.localeCompare(b.path));
   return out;
 }
@@ -176,6 +190,33 @@ export async function readProjectFile(projectId, relPath) {
 export async function readProjectFileBuffer(projectId, relPath) {
   const abs = resolveInSrc(projectId, relPath);
   return await fs.readFile(abs);
+}
+
+// 새 (빈) 텍스트 파일 생성. 편집 가능한 형식만, 이미 있으면 거부. 상위 폴더는 자동 생성.
+export async function createProjectFile(projectId, relPath) {
+  const rel = String(relPath || '').trim();
+  if (!rel) throw new Error('파일 이름이 필요합니다.');
+  if (!isEditablePath(rel)) throw new Error('이 형식은 만들 수 없습니다 (.tex/.bib/.sty/.txt 등 텍스트만 가능).');
+  const abs = resolveInSrc(projectId, rel);
+  let exists = false;
+  try { await fs.access(abs); exists = true; } catch { /* 없음 */ }
+  if (exists) throw new Error('이미 존재하는 파일입니다.');
+  await ensureDir(path.dirname(abs));
+  await fs.writeFile(abs, '', 'utf8');
+  return rel.replace(/\\/g, '/');
+}
+
+// 프로젝트 내 파일/폴더 삭제(경로탈출 차단). 폴더면 재귀 삭제. src 루트 자체는 거부.
+export async function deleteProjectPath(projectId, relPath) {
+  const srcDir = projectSrcDir(projectId);
+  const abs = resolveInSrc(projectId, relPath);
+  if (abs === srcDir) throw new Error('루트는 삭제할 수 없습니다.');
+  let stat;
+  try { stat = await fs.stat(abs); }
+  catch { throw new Error('파일을 찾을 수 없습니다.'); }
+  if (stat.isDirectory()) await fs.rm(abs, { recursive: true, force: true });
+  else await fs.unlink(abs);
+  return String(relPath).replace(/\\/g, '/');
 }
 
 // 업로드된 자산(이미지) 저장. 편집 불가 형식이지만 프로젝트에 추가 가능.

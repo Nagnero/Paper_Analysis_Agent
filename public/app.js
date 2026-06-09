@@ -487,6 +487,9 @@ const latexAssetView = $('latexAssetView');
 const latexUploadBtn = $('latexUploadBtn');
 const latexAssetInput = $('latexAssetInput');
 const latexDiffHost = $('latexDiffHost');
+const latexCtxMenu = $('latexCtxMenu');
+const latexTreeToggle = $('latexTreeToggle');
+const LATEX_TREE_HIDDEN_KEY = 'paa.latexTreeHidden';
 const latexDiffBar = $('latexDiffBar');
 const latexDiffKeep = $('latexDiffKeep');
 const latexDiffRevert = $('latexDiffRevert');
@@ -1744,19 +1747,21 @@ function buildLatexTree(files) {
 function buildLatexFileButton(f, depth) {
   const name = f.path.split('/').pop();
   const kind = f.kind || (f.editable ? 'text' : 'other');
+  const previewable = kind === 'image' || kind === 'pdf';
   const isSel = f.path === state.currentLatexFile || f.path === state.latexPreview;
   const item = document.createElement('button');
   item.type = 'button';
   item.className = 'latex-file'
     + (isSel ? ' active' : '')
-    + (kind === 'text' ? '' : kind === 'image' ? ' image' : ' readonly');
+    + (kind === 'text' ? '' : previewable ? ' image' : ' readonly');
   item.style.paddingLeft = (12 + depth * 12) + 'px';
-  const icon = kind === 'image' ? '🖼' : (f.path === state.latexMainFile ? '★' : '📄');
+  item.dataset.path = f.path; // 우클릭 삭제용
+  const icon = previewable ? '🖼' : (f.path === state.latexMainFile ? '★' : '📄');
   item.textContent = `${icon} ${name}`;
-  item.title = kind === 'other' ? `${f.path} (열 수 없음)` : f.path;
+  item.title = kind === 'other' ? `${f.path} (미리보기 불가 · 우클릭으로 삭제)` : f.path;
   if (kind === 'text') item.addEventListener('click', () => loadLatexFile(f.path));
-  else if (kind === 'image') item.addEventListener('click', () => showLatexImage(f.path));
-  else item.disabled = true;
+  else if (previewable) item.addEventListener('click', () => showLatexImage(f.path));
+  // 'other'(eps 등)는 클릭 동작 없음 — disabled로 두지 않아 우클릭(삭제)은 가능
   return item;
 }
 
@@ -1773,6 +1778,7 @@ function renderLatexTreeNode(node, prefix, depth) {
     const summary = document.createElement('summary');
     summary.style.paddingLeft = (8 + depth * 12) + 'px';
     summary.textContent = d;
+    summary.dataset.dirpath = dirPath; // 우클릭 삭제용(폴더)
     details.appendChild(summary);
     details.appendChild(renderLatexTreeNode(node.dirs.get(d), dirPath, depth + 1));
     frag.appendChild(details);
@@ -1832,7 +1838,7 @@ async function revertLatexDiff() {
   showToast('수정 전으로 되돌렸습니다');
 }
 
-// 이미지 파일 미리보기 (편집 대상은 바뀌지 않음)
+// 이미지/PDF 파일 미리보기 (편집 대상은 바뀌지 않음)
 function showLatexImage(filePath) {
   if (!state.currentProjectId || !latexAssetView) return;
   if (state.latexDiffPending) closeLatexDiff();
@@ -1840,16 +1846,121 @@ function showLatexImage(filePath) {
   if (latexEditorHost) latexEditorHost.style.display = 'none';
   latexAssetView.hidden = false;
   latexAssetView.innerHTML = '';
-  const img = document.createElement('img');
-  img.src = `/api/library/projects/${state.currentProjectId}/asset?path=${encodeURIComponent(filePath)}&t=${Date.now()}`;
-  img.alt = filePath;
-  img.onerror = () => { latexAssetView.innerHTML = '<div class="latex-asset-cap">이미지를 불러오지 못했습니다</div>'; };
+  const url = `/api/library/projects/${state.currentProjectId}/asset?path=${encodeURIComponent(filePath)}&t=${Date.now()}`;
+  if (/\.pdf$/i.test(filePath)) {
+    const frame = document.createElement('iframe');
+    frame.src = url;
+    frame.className = 'latex-asset-frame';
+    latexAssetView.appendChild(frame);
+  } else {
+    const img = document.createElement('img');
+    img.src = url;
+    img.alt = filePath;
+    img.onerror = () => { latexAssetView.innerHTML = '<div class="latex-asset-cap">이미지를 불러오지 못했습니다</div>'; };
+    latexAssetView.appendChild(img);
+  }
   const cap = document.createElement('div');
   cap.className = 'latex-asset-cap';
   cap.textContent = filePath;
-  latexAssetView.appendChild(img);
   latexAssetView.appendChild(cap);
   renderLatexFileTree();
+}
+
+// ---- 파일 트리 우클릭 컨텍스트 메뉴 (빈 공간=새 파일, 파일/폴더=삭제 등) ----
+let latexCtxTarget = null;
+function openLatexCtxMenu(x, y, target) {
+  if (!latexCtxMenu) return;
+  latexCtxTarget = target;
+  // 대상 종류에 따라 항목 구성
+  latexCtxMenu.innerHTML = '';
+  const addItem = (label, act) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.dataset.act = act; b.textContent = label;
+    latexCtxMenu.appendChild(b);
+  };
+  if (target.type === 'empty') {
+    addItem('📄 새 파일', 'newfile');
+  } else if (target.type === 'dir') {
+    addItem('📄 여기에 새 파일', 'newfile');
+    addItem('🗑 삭제', 'delete');
+  } else {
+    addItem('🗑 삭제', 'delete');
+  }
+  latexCtxMenu.hidden = false;
+  const mw = latexCtxMenu.offsetWidth || 150;
+  const mh = latexCtxMenu.offsetHeight || 60;
+  latexCtxMenu.style.left = Math.min(x, window.innerWidth - mw - 8) + 'px';
+  latexCtxMenu.style.top = Math.min(y, window.innerHeight - mh - 8) + 'px';
+}
+function closeLatexCtxMenu() {
+  if (latexCtxMenu) latexCtxMenu.hidden = true;
+  latexCtxTarget = null;
+}
+
+// 새 파일: 트리에 인라인 입력칸을 띄워 이름을 받는다(Electron은 prompt 미지원)
+function startNewLatexFile(dir) {
+  if (!state.currentProjectId || !latexFileTree) return;
+  latexFileTree.querySelector('.latex-newfile')?.remove();
+  const row = document.createElement('div');
+  row.className = 'latex-newfile';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = (dir ? dir + '/' : '') + '파일명.tex';
+  row.appendChild(input);
+  latexFileTree.prepend(row);
+  input.focus();
+  let done = false;
+  const finish = async (commit) => {
+    if (done) return; done = true;
+    const name = input.value.trim();
+    row.remove();
+    if (!commit || !name) return;
+    await createLatexFileApi(dir ? `${dir}/${name}` : name);
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener('blur', () => finish(true));
+}
+
+async function createLatexFileApi(rel) {
+  try {
+    const res = await fetch(`/api/library/projects/${state.currentProjectId}/file`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: rel }),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+    state.latexFiles = j.files || state.latexFiles;
+    renderLatexFileTree();
+    await loadLatexFile(j.path);
+    showToast('생성됨: ' + j.path);
+  } catch (err) {
+    showToast('생성 실패: ' + err.message);
+  }
+}
+
+async function deleteLatexPath(target) {
+  if (!target || !state.currentProjectId) return;
+  const isDir = target.type === 'dir' || target.isDir;
+  const label = isDir ? `폴더 "${target.path}" 및 내부 전체` : `"${target.path}"`;
+  if (!confirm(`${label}을(를) 삭제할까요? 되돌릴 수 없습니다.`)) return;
+  try {
+    const res = await fetch(`/api/library/projects/${state.currentProjectId}/file?path=${encodeURIComponent(target.path)}`, { method: 'DELETE' });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+    state.latexFiles = j.files || state.latexFiles;
+    const underDeleted = (p) => p === target.path || (p || '').startsWith(target.path + '/');
+    if (underDeleted(state.latexPreview)) { state.latexPreview = null; showLatexEditorPane(); }
+    if (underDeleted(state.currentLatexFile)) {
+      state.currentLatexFile = null;
+      if (state.latexMainFile) await loadLatexFile(state.latexMainFile);
+    }
+    renderLatexFileTree();
+    showToast(`삭제됨: ${target.path}`);
+  } catch (err) {
+    showToast('삭제 실패: ' + err.message);
+  }
 }
 
 async function loadLatexFile(filePath) {
@@ -2460,6 +2571,47 @@ if (latexChatClear) latexChatClear.addEventListener('click', () => {
 });
 if (latexDiffKeep) latexDiffKeep.addEventListener('click', () => closeLatexDiff());
 if (latexDiffRevert) latexDiffRevert.addEventListener('click', () => revertLatexDiff());
+
+// 파일 트리 우클릭 → 파일/폴더면 삭제, 빈 공간이면 새 파일
+if (latexFileTree) latexFileTree.addEventListener('contextmenu', (e) => {
+  const fileEl = e.target.closest('[data-path]');
+  const dirEl = e.target.closest('[data-dirpath]');
+  let target;
+  if (fileEl && latexFileTree.contains(fileEl)) target = { type: 'file', path: fileEl.dataset.path };
+  else if (dirEl && latexFileTree.contains(dirEl)) target = { type: 'dir', path: dirEl.dataset.dirpath };
+  else target = { type: 'empty' };
+  e.preventDefault();
+  openLatexCtxMenu(e.clientX, e.clientY, target);
+});
+if (latexCtxMenu) latexCtxMenu.addEventListener('click', (e) => {
+  const act = e.target.closest('[data-act]')?.dataset.act;
+  const target = latexCtxTarget;
+  closeLatexCtxMenu();
+  if (act === 'delete') deleteLatexPath(target);
+  else if (act === 'newfile') startNewLatexFile(target && target.type === 'dir' ? target.path : '');
+});
+document.addEventListener('click', (e) => {
+  if (latexCtxMenu && !latexCtxMenu.hidden && !latexCtxMenu.contains(e.target)) closeLatexCtxMenu();
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeLatexCtxMenu(); });
+window.addEventListener('blur', () => closeLatexCtxMenu());
+
+// 파일 탐색기 접기/펼치기
+function applyLatexTreeHidden(hidden) {
+  if (latexFileTree) latexFileTree.hidden = !!hidden;
+  if (latexTreeToggle) latexTreeToggle.classList.toggle('active', !hidden);
+  if (latexEditor) setTimeout(() => latexEditor.layout(), 0);
+}
+(function initLatexTreeToggle() {
+  let hidden = false;
+  try { hidden = localStorage.getItem(LATEX_TREE_HIDDEN_KEY) === '1'; } catch { /* ignore */ }
+  applyLatexTreeHidden(hidden);
+})();
+if (latexTreeToggle) latexTreeToggle.addEventListener('click', () => {
+  const next = !(latexFileTree && latexFileTree.hidden);
+  applyLatexTreeHidden(next);
+  try { localStorage.setItem(LATEX_TREE_HIDDEN_KEY, next ? '1' : '0'); } catch { /* ignore */ }
+});
 
 // 채팅 로그 높이: 저장값 복원 + 드래그 리사이즈
 (function initLatexChatHeight() {
