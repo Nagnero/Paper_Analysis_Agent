@@ -2511,6 +2511,27 @@ sendBtn.addEventListener('click', () => { if (!sendBtn.disabled) onSend(); });
 
 newAnalysisBtn.addEventListener('click', startNewAnalysis);
 
+// 사이드바 접기/펼치기
+const sidebarToggle = $('sidebarToggle');
+const appLayout = $('appLayout');
+const SIDEBAR_COLLAPSED_KEY = 'paa.sidebarCollapsed';
+function applySidebarCollapsed(collapsed) {
+  if (appLayout) appLayout.classList.toggle('sidebar-collapsed', !!collapsed);
+  if (sidebarToggle) sidebarToggle.classList.toggle('active', !collapsed);
+  if (pdfViewer && pdfState.available && pdfState.open) pdfViewer.relayout();
+  if (latexEditor) setTimeout(() => latexEditor.layout(), 0);
+}
+(function initSidebarCollapsed() {
+  let c = false;
+  try { c = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1'; } catch { /* ignore */ }
+  applySidebarCollapsed(c);
+})();
+if (sidebarToggle) sidebarToggle.addEventListener('click', () => {
+  const collapsed = !appLayout.classList.contains('sidebar-collapsed');
+  applySidebarCollapsed(collapsed);
+  try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? '1' : '0'); } catch { /* ignore */ }
+});
+
 for (const tab of workspaceTabs) {
   tab.addEventListener('click', () => setWorkspaceTab(tab.getAttribute('data-workspace-tab')));
 }

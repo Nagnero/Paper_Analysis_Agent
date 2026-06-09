@@ -51,6 +51,12 @@ html, body {
   flex-direction: column;
   overflow: hidden;
 }
+#appLayout.sidebar-collapsed #sidebar { display: none; }
+.icon-toggle {
+  background: transparent; border: 1px solid var(--border); color: var(--text);
+  border-radius: 6px; padding: 3px 9px; margin-right: 10px; cursor: pointer; font-size: 14px; line-height: 1;
+}
+.icon-toggle:hover { background: var(--surface-2); }
 #mainArea {
   flex: 1;
   display: flex;
