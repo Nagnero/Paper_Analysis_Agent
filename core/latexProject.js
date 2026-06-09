@@ -3,7 +3,7 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { unzipSync, zipSync } from 'fflate';
-import { projectSrcDir, ensureDir } from './fileManager.js';
+import { projectSrcDir, projectDir, ensureDir } from './fileManager.js';
 
 const MAX_FILES = 3000;
 const MAX_TOTAL_BYTES = 120 * 1024 * 1024; // 해제 후 총량 상한
@@ -213,6 +213,46 @@ export async function createProjectFile(projectId, relPath) {
   await ensureDir(path.dirname(abs));
   await fs.writeFile(abs, '', 'utf8');
   return rel.replace(/\\/g, '/');
+}
+
+// 작성팀 채팅 로그 — 프로젝트 디렉터리에 영구 저장(src 밖이라 파일트리·zip에 안 들어감).
+const CHAT_FILE = 'chat.json';
+export async function readProjectChat(projectId) {
+  try {
+    const raw = await fs.readFile(path.join(projectDir(projectId), CHAT_FILE), 'utf8');
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch { return []; }
+}
+export async function writeProjectChat(projectId, chats) {
+  const arr = (Array.isArray(chats) ? chats : [])
+    .filter(m => m && typeof m.text === 'string')
+    .map(m => ({ c: m.c === 'user' ? 'user' : (m.c === 'ai error' ? 'ai error' : 'ai'), text: String(m.text).slice(0, 8000) }))
+    .slice(-200);
+  const dir = projectDir(projectId);
+  await ensureDir(dir);
+  await fs.writeFile(path.join(dir, CHAT_FILE), JSON.stringify(arr), 'utf8');
+  return arr.length;
+}
+
+// 파일/폴더 이동(드래그&드롭). 경로탈출 차단, 대상 중복·자기하위 이동 거부.
+export async function moveProjectPath(projectId, from, to) {
+  const absFrom = resolveInSrc(projectId, from);
+  const absTo = resolveInSrc(projectId, to);
+  const srcDir = projectSrcDir(projectId);
+  if (absFrom === srcDir) throw new Error('루트는 이동할 수 없습니다.');
+  if (absFrom === absTo) return String(to).replace(/\\/g, '/');
+  let st;
+  try { st = await fs.stat(absFrom); } catch { throw new Error('원본을 찾을 수 없습니다.'); }
+  if (st.isDirectory() && (absTo === absFrom || absTo.startsWith(absFrom + path.sep))) {
+    throw new Error('폴더를 자기 자신 하위로 이동할 수 없습니다.');
+  }
+  let exists = false;
+  try { await fs.access(absTo); exists = true; } catch { /* 없음 */ }
+  if (exists) throw new Error('대상 위치에 같은 이름이 이미 있습니다.');
+  await ensureDir(path.dirname(absTo));
+  await fs.rename(absFrom, absTo);
+  return String(to).replace(/\\/g, '/');
 }
 
 // 새 폴더 생성. 이미 있으면 거부. 경로탈출 차단.

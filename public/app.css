@@ -38,9 +38,16 @@ html, body {
   overflow: hidden;
 }
 
+/* 상단바(전체 폭) 위, 그 아래 사이드바+본문 */
+#appShell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
 #appLayout {
   display: flex;
-  height: 100vh;
+  flex: 1;
+  min-height: 0;
 }
 #sidebar {
   width: 268px;
@@ -51,6 +58,22 @@ html, body {
   flex-direction: column;
   overflow: hidden;
 }
+#appLayout.sidebar-collapsed #sidebar { display: none; }
+.icon-toggle {
+  background: transparent; border: 1px solid var(--border); color: var(--text);
+  border-radius: 6px; padding: 3px 9px; margin-right: 10px; cursor: pointer; font-size: 14px; line-height: 1;
+}
+.icon-toggle:hover { background: var(--surface-2); }
+.sidebar-brand-row { display: flex; align-items: center; margin: 0 2px 10px; }
+.sidebar-brand-row .sidebar-brand { margin: 0; }
+.sidebar-collapse-btn {
+  background: transparent; border: 0; color: var(--muted); cursor: pointer;
+  font-size: 16px; line-height: 1; padding: 0 4px; margin-left: auto;
+}
+.sidebar-collapse-btn:hover { color: var(--text); }
+/* LaTeX 전체화면 모드: 상단바·사이드바 숨김 */
+body.latex-fullscreen .top,
+body.latex-fullscreen #sidebar { display: none; }
 #mainArea {
   flex: 1;
   display: flex;
@@ -586,9 +609,13 @@ button.danger:hover { filter: brightness(0.9); }
 .top {
   flex-shrink: 0;
   z-index: 30;
+  position: relative;
   background: rgba(14, 15, 19, 0.92);
   backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--border);
+}
+.top-left-toggle {
+  position: absolute; left: 16px; top: 50%; transform: translateY(-50%); margin: 0; z-index: 1;
 }
 .top-inner {
   max-width: 880px;
@@ -1608,6 +1635,10 @@ button { font-family: inherit; }
 .latex-file.active { background: var(--surface-2); color: var(--accent); }
 .latex-file.readonly { color: var(--muted); cursor: default; }
 .latex-file.image { color: var(--text); }
+.latex-file[draggable="true"] { cursor: grab; }
+.latex-file.dragging { opacity: 0.45; }
+.latex-dir.drop-target > summary { background: var(--accent-soft); outline: 1px dashed var(--accent); outline-offset: -1px; }
+.latex-filetree.drop-root { outline: 2px dashed var(--accent); outline-offset: -3px; }
 /* 디렉터리 트리 */
 .latex-dir { border: 0; }
 .latex-dir > summary {

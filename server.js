@@ -854,7 +854,7 @@ async function handlePromptsPut(req, res) {
   const next = { ...current };
   const allowedPromptKeys = [
     'analyst', 'verifier', 'writer', 'orchestrator', 'coreInsight', 'evidence',
-    'writeOrchestrator', 'scopeLocator', 'writePlan', 'writeBody', 'writeFigure', 'writeReview', 'writeCitation', 'writeCompile', 'research',
+    'writeOrchestrator', 'writePlan', 'writeBody', 'writeFigure', 'writeReview', 'writeCitation', 'writeCompile', 'research', 'writeChat',
   ];
   for (const k of allowedPromptKeys) {
     if (k in payload) {
@@ -1316,6 +1316,50 @@ async function handleProjectFileCreate(req, res, id) {
   }
 }
 
+// 작성팀 채팅 로그 읽기/저장 (디스크 영구 — 랜덤 포트로 localStorage가 초기화돼도 유지)
+async function handleProjectChatGet(req, res, id) {
+  try {
+    const project = await library.getProject(id);
+    if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+    const chats = await latexProject.readProjectChat(id);
+    jsonResponse(res, 200, { chats });
+  } catch (err) {
+    jsonResponse(res, 500, { error: err.message });
+  }
+}
+
+async function handleProjectChatPut(req, res, id) {
+  try {
+    const project = await library.getProject(id);
+    if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+    const body = await readJsonBody(req, { maxBytes: 2 * 1024 * 1024 });
+    await latexProject.writeProjectChat(id, Array.isArray(body.chats) ? body.chats : []);
+    jsonResponse(res, 200, { ok: true });
+  } catch (err) {
+    jsonResponse(res, 400, { error: err.message });
+  }
+}
+
+// 파일/폴더 이동(드래그&드롭) — 메인 파일이 이동되면 main_file 갱신
+async function handleProjectMove(req, res, id) {
+  try {
+    const project = await library.getProject(id);
+    if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+    const body = await readJsonBody(req, { maxBytes: 1 << 16 });
+    const from = typeof body.from === 'string' ? body.from.trim() : '';
+    const to = typeof body.to === 'string' ? body.to.trim() : '';
+    if (!from || !to) return jsonResponse(res, 400, { error: 'from/to required' });
+    const moved = await latexProject.moveProjectPath(id, from, to);
+    let mainFile = project.main_file;
+    if (project.main_file === from) { mainFile = moved; await library.updateProject(id, { mainFile }).catch(() => {}); }
+    await library.touchProject(id).catch(() => {});
+    const files = await latexProject.listFiles(id);
+    jsonResponse(res, 200, { ok: true, from, to: moved, files, mainFile });
+  } catch (err) {
+    jsonResponse(res, 400, { error: err.message });
+  }
+}
+
 // 새 폴더 생성(빈 공간/폴더 우클릭 → 새 폴더)
 async function handleProjectFolderCreate(req, res, id) {
   try {
@@ -1444,10 +1488,13 @@ function handleProjectsDispatch(req, res) {
   if (sub === '/zip' && req.method === 'GET') return handleProjectZip(req, res, id);
   if (sub === '/synctex' && req.method === 'GET') return handleProjectSynctex(req, res, id, u.searchParams);
   if (sub === '/compile' && req.method === 'POST') return handleProjectCompile(req, res, id);
+  if (sub === '/chat' && req.method === 'GET') return handleProjectChatGet(req, res, id);
+  if (sub === '/chat' && req.method === 'PUT') return handleProjectChatPut(req, res, id);
   if (sub === '/chat-edit' && req.method === 'POST') return handleProjectChatEdit(req, res, id);
   if (sub === '/file' && req.method === 'GET') return handleProjectFileGet(req, res, id, u.searchParams.get('path'));
   if (sub === '/file' && req.method === 'POST') return handleProjectFileCreate(req, res, id);
   if (sub === '/folder' && req.method === 'POST') return handleProjectFolderCreate(req, res, id);
+  if (sub === '/move' && req.method === 'POST') return handleProjectMove(req, res, id);
   if (sub === '/file' && req.method === 'PUT') return handleProjectFilePut(req, res, id, u.searchParams.get('path'));
   if (sub === '/file' && req.method === 'DELETE') return handleProjectFileDelete(req, res, id, u.searchParams.get('path'));
   if (sub === '/asset' && req.method === 'GET') return handleProjectAssetGet(req, res, id, u.searchParams.get('path'));

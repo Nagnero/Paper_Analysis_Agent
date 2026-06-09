@@ -13,7 +13,7 @@ const KEYS = [
   // 분석팀 공용 — 근거 탐색(작성팀에서도 사용)
   'evidence',
   // 논문 작성팀 (본문/그림은 계획→작성→검토 멀티에이전트) + 리서치(웹)
-  'writeOrchestrator', 'scopeLocator', 'writePlan', 'writeBody', 'writeFigure', 'writeReview', 'writeCitation', 'writeCompile', 'research',
+  'writeOrchestrator', 'writePlan', 'writeBody', 'writeFigure', 'writeReview', 'writeCitation', 'writeCompile', 'research', 'writeChat',
 ];
 
 /** 디스크에서 기본 프롬프트 읽기 */

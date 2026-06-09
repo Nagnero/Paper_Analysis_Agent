@@ -8,10 +8,23 @@
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-  <div id="appLayout">
+  <div id="appShell">
+    <header class="top">
+      <button type="button" id="sidebarToggle" class="icon-toggle top-left-toggle" title="사이드바 접기/펼치기" aria-label="사이드바 토글">☰</button>
+      <div class="top-inner">
+        <div class="brand">Korean Paper Agent Console <span class="ver">v0.5.3</span></div>
+        <div class="top-actions">
+          <button type="button" id="pdfToggleBtn" class="pdf-toggle" title="논문 보기/숨기기" hidden>📄 논문</button>
+        </div>
+      </div>
+    </header>
+    <div id="appLayout">
     <aside id="sidebar">
       <div class="sidebar-header">
-        <div class="sidebar-brand">📚 PAA</div>
+        <div class="sidebar-brand-row">
+          <div class="sidebar-brand">📚 PAA</div>
+          <button type="button" id="sidebarCollapse" class="sidebar-collapse-btn" title="사이드바 숨기기" aria-label="사이드바 숨기기">«</button>
+        </div>
         <button type="button" id="newAnalysisBtn" class="sidebar-action primary">＋ 새 작업</button>
       </div>
       <div class="sidebar-section-head">
@@ -30,15 +43,6 @@
       </div>
     </aside>
     <div id="mainArea">
-      <header class="top">
-        <div class="top-inner">
-          <div class="brand">Korean Paper Agent Console <span class="ver">v0.5.2</span></div>
-          <div class="top-actions">
-            <button type="button" id="pdfToggleBtn" class="pdf-toggle" title="논문 보기/숨기기" hidden>📄 논문</button>
-          </div>
-        </div>
-      </header>
-
       <div id="authBanner" class="auth-banner" hidden>
         <span class="auth-banner-text"></span>
         <button type="button" id="authBannerRefreshBtn" class="btn-secondary">다시 확인</button>
@@ -98,6 +102,7 @@
             <button type="button" id="latexUploadBtn" class="latex-btn" title="이미지 파일 추가 (드래그도 가능)">⬆ 이미지</button>
             <input id="latexAssetInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/bmp,image/svg+xml" hidden multiple />
             <button type="button" id="latexZipBtn" class="latex-btn" title="프로젝트 ZIP 다운로드">⬇ ZIP</button>
+            <button type="button" id="latexFullscreenBtn" class="latex-btn" title="전체화면 (사이드바·상단바 숨김, Esc로 해제)">⛶ 전체화면</button>
             <button type="button" id="latexLogBtn" class="latex-btn" title="컴파일 로그">로그</button>
             <button type="button" id="latexCompileBtn" class="latex-btn primary">컴파일</button>
           </div>
@@ -145,6 +150,7 @@
           <div id="pdfBody" class="pdf-pane-body"></div>
         </aside>
       </div>
+    </div>
     </div>
   </div>
 
@@ -296,13 +302,6 @@
         <!-- 작성팀 · 팀원 에이전트 -->
         <div class="settings-pane" data-team="writing" data-section="agents">
           <p class="llm-hint">본문·그림/표 모듈은 <b>계획 → 작성 → 검토</b> 멀티에이전트로 동작합니다(STORM식). 인용은 단일, 컴파일 수정은 변경 시마다 항상 실행.</p>
-          <details class="team-agent">
-            <summary>범위 지정 (Scope) — 특정 부분만 수정 시 그 줄 범위만 찾아 토큰 절약 (기본 Haiku)</summary>
-            <div class="team-agent-body">
-              <textarea id="promptScopeLocator" spellcheck="false"></textarea>
-              <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="scopeLocator">기본값으로 채우기 (저장 필요)</button></div>
-            </div>
-          </details>
           <details class="team-agent" open>
             <summary>계획 (Planner) — 작성 전 개요·계획 수립 (본문·그림 공용)</summary>
             <div class="team-agent-body">
@@ -352,18 +351,19 @@
               <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="research">기본값으로 채우기 (저장 필요)</button></div>
             </div>
           </details>
+          <details class="team-agent">
+            <summary>일반 채팅 — 전문 모듈에 안 맞는 요청을 튜닝 없이 대화로 답변 (읽기 전용)</summary>
+            <div class="team-agent-body">
+              <textarea id="promptWriteChat" spellcheck="false"></textarea>
+              <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="writeChat">기본값으로 채우기 (저장 필요)</button></div>
+            </div>
+          </details>
         </div>
         <!-- 작성팀 · 모델 -->
         <div class="settings-pane" data-team="writing" data-section="model">
           <p class="llm-hint">작성팀 에이전트별 백엔드·모델·추론 강도.</p>
           <div class="llm-row" data-role="writeOrchestrator">
             <label>작성 오케스트레이터</label>
-            <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
-            <select class="llm-model"></select>
-            <select class="llm-reasoning"></select>
-          </div>
-          <div class="llm-row" data-role="scopeLocator">
-            <label>범위 지정 (Scope)</label>
             <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
             <select class="llm-model"></select>
             <select class="llm-reasoning"></select>
@@ -406,6 +406,12 @@
           </div>
           <div class="llm-row" data-role="research">
             <label>리서치 (웹)</label>
+            <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
+            <select class="llm-model"></select>
+            <select class="llm-reasoning"></select>
+          </div>
+          <div class="llm-row" data-role="writeChat">
+            <label>일반 채팅</label>
             <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
             <select class="llm-model"></select>
             <select class="llm-reasoning"></select>

@@ -519,13 +519,13 @@ const PROMPT_FIELDS = {
   // 분석팀 공용 — 근거 탐색(작성팀에서도 사용)
   evidence: $('promptEvidence'),
   // 논문 작성팀 (본문/그림은 계획→작성→검토 멀티에이전트)
-  writeOrchestrator: $('promptWriteOrchestrator'), scopeLocator: $('promptScopeLocator'), writePlan: $('promptWritePlan'),
+  writeOrchestrator: $('promptWriteOrchestrator'), writePlan: $('promptWritePlan'),
   writeBody: $('promptWriteBody'), writeFigure: $('promptWriteFigure'), writeReview: $('promptWriteReview'),
-  writeCitation: $('promptWriteCitation'), writeCompile: $('promptWriteCompile'), research: $('promptResearch'),
+  writeCitation: $('promptWriteCitation'), writeCompile: $('promptWriteCompile'), research: $('promptResearch'), writeChat: $('promptWriteChat'),
 };
 const LLM_ROLES = [
   'orchestrator', 'analyst', 'verifier', 'writer', 'coreInsight', 'chat', 'evidence',
-  'writeOrchestrator', 'scopeLocator', 'writePlan', 'writeBody', 'writeFigure', 'writeReview', 'writeCitation', 'writeCompile', 'research',
+  'writeOrchestrator', 'writePlan', 'writeBody', 'writeFigure', 'writeReview', 'writeCitation', 'writeCompile', 'research', 'writeChat',
 ];
 const saveLlmBtn = $('saveLlmBtn');
 const resetLlmBtn = $('resetLlmBtn');
@@ -1632,6 +1632,7 @@ function enterLatexMode() {
 }
 
 function exitLatexMode() {
+  if (document.body.classList.contains('latex-fullscreen')) setLatexFullscreen(false);
   if (state.mode === 'latex' && state.latexDirty) { saveCurrentLatexFile(); }
   if (latexPane) latexPane.hidden = true;
   if (chatPane) chatPane.hidden = false;
@@ -1708,7 +1709,7 @@ async function openLatexProject(id) {
     enterLatexMode();
     closeLatexDiff();
     showLatexEditorPane();
-    restoreLatexChat(id);
+    restoreLatexChat(id); // 서버에서 비동기 복원(렌더는 완료 시)
     if (latexTitle) { latexTitle.textContent = project.name || 'LaTeX 프로젝트'; latexTitle.title = project.name || ''; }
     renderLatexFileTree();
     try {
@@ -1758,7 +1759,8 @@ function buildLatexFileButton(f, depth) {
     + (isSel ? ' active' : '')
     + (kind === 'text' ? '' : previewable ? ' image' : ' readonly');
   item.style.paddingLeft = (12 + depth * 12) + 'px';
-  item.dataset.path = f.path; // 우클릭 삭제용
+  item.dataset.path = f.path; // 우클릭 삭제 · 드래그 이동용
+  item.draggable = true;      // 폴더 안/밖으로 끌어 이동
   const icon = previewable ? '🖼' : (f.path === state.latexMainFile ? '★' : '📄');
   item.textContent = `${icon} ${name}`;
   item.title = kind === 'other' ? `${f.path} (미리보기 불가 · 우클릭으로 삭제)` : f.path;
@@ -1947,6 +1949,31 @@ async function createLatexEntryApi(kind, rel) {
   }
 }
 
+// 드래그&드롭으로 파일/폴더를 destDir(폴더 경로, '' = 루트)로 이동
+async function moveLatexPath(from, destDir) {
+  if (!from || !state.currentProjectId) return;
+  const name = from.split('/').pop();
+  const to = destDir ? `${destDir}/${name}` : name;
+  if (to === from) return; // 같은 위치
+  try {
+    const res = await fetch(`/api/library/projects/${state.currentProjectId}/move`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from, to }),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+    state.latexFiles = j.files || state.latexFiles;
+    if (j.mainFile) state.latexMainFile = j.mainFile;
+    // 열린 파일/미리보기 경로 갱신
+    const remap = (p) => (p === from ? to : (p && p.startsWith(from + '/') ? to + p.slice(from.length) : p));
+    state.currentLatexFile = remap(state.currentLatexFile);
+    state.latexPreview = remap(state.latexPreview);
+    renderLatexFileTree();
+    showToast(`이동: ${from} → ${to}`);
+  } catch (err) {
+    showToast('이동 실패: ' + err.message);
+  }
+}
+
 async function deleteLatexPath(target) {
   if (!target || !state.currentProjectId) return;
   const isDir = target.type === 'dir' || target.isDir;
@@ -2096,17 +2123,16 @@ function appendLatexChat(role, text) {
   return el;
 }
 
-// ---- 작성팀 채팅 로그: 프로젝트별 localStorage 영속 ----
-function latexChatKey(id) { return `paa.latexChat.${id}`; }
-
+// ---- 작성팀 채팅 로그: 서버(디스크)에 프로젝트별 영속 ----
+// 앱이 매번 랜덤 포트로 떠서 origin이 바뀌면 localStorage가 초기화되므로, 서버에 저장해 영구 보존.
 function persistLatexChat() {
   if (!state.currentProjectId) return;
-  try {
-    // 최근 100개만 보관
-    const trimmed = state.latexChatHistory.slice(-100);
-    state.latexChatHistory = trimmed;
-    localStorage.setItem(latexChatKey(state.currentProjectId), JSON.stringify(trimmed));
-  } catch { /* ignore */ }
+  const id = state.currentProjectId;
+  const chats = state.latexChatHistory.slice(-200);
+  state.latexChatHistory = chats;
+  fetch(`/api/library/projects/${id}/chat`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chats }),
+  }).catch(() => { /* 저장 실패는 조용히 무시 */ });
 }
 
 // 완료된 메시지를 기록(c = 'user' | 'ai' | 'ai error', text = 최종 표시 텍스트)
@@ -2115,13 +2141,7 @@ function recordLatexChat(c, text) {
   persistLatexChat();
 }
 
-// 프로젝트 열 때 저장된 로그 복원(없으면 비움)
-function restoreLatexChat(projectId) {
-  state.latexChatHistory = [];
-  try {
-    const raw = localStorage.getItem(latexChatKey(projectId));
-    if (raw) state.latexChatHistory = JSON.parse(raw) || [];
-  } catch { state.latexChatHistory = []; }
+function renderLatexChatHistory() {
   if (!latexChatLog) return;
   latexChatLog.innerHTML = '';
   for (const m of state.latexChatHistory) {
@@ -2133,12 +2153,24 @@ function restoreLatexChat(projectId) {
   latexChatLog.scrollTop = latexChatLog.scrollHeight;
 }
 
+// 프로젝트 열 때 서버에서 저장된 로그 복원(없으면 비움)
+async function restoreLatexChat(projectId) {
+  state.latexChatHistory = [];
+  renderLatexChatHistory(); // 이전 프로젝트 로그 즉시 지움
+  try {
+    const res = await fetch(`/api/library/projects/${projectId}/chat`);
+    if (res.ok) {
+      const j = await res.json();
+      if (Array.isArray(j.chats)) state.latexChatHistory = j.chats;
+    }
+  } catch { /* ignore */ }
+  if (state.currentProjectId === projectId) renderLatexChatHistory();
+}
+
 function clearLatexChat() {
   state.latexChatHistory = [];
   if (latexChatLog) latexChatLog.innerHTML = '';
-  if (state.currentProjectId) {
-    try { localStorage.removeItem(latexChatKey(state.currentProjectId)); } catch { /* ignore */ }
-  }
+  persistLatexChat(); // 서버에도 빈 로그 저장
 }
 
 async function sendLatexChat() {
@@ -2189,7 +2221,7 @@ async function sendLatexChat() {
 
     // 근거 탐색·웹 리서치(읽기 전용): 파일·PDF 변경 없이 답변만 표시
     if (final.readOnly) {
-      const icon = final.module === 'research' ? '🌐' : '🔎';
+      const icon = final.module === 'research' ? '🌐' : final.module === 'chat' ? '💬' : '🔎';
       pending.textContent = `${icon} ${final.answer || final.note || '결과 없음'}`;
       recordLatexChat('ai', pending.textContent);
       latexChatLog.scrollTop = latexChatLog.scrollHeight;
@@ -2506,6 +2538,49 @@ sendBtn.addEventListener('click', () => { if (!sendBtn.disabled) onSend(); });
 
 newAnalysisBtn.addEventListener('click', startNewAnalysis);
 
+// 사이드바 접기/펼치기
+const sidebarToggle = $('sidebarToggle');
+const appLayout = $('appLayout');
+const SIDEBAR_COLLAPSED_KEY = 'paa.sidebarCollapsed';
+function applySidebarCollapsed(collapsed) {
+  if (appLayout) appLayout.classList.toggle('sidebar-collapsed', !!collapsed);
+  if (sidebarToggle) sidebarToggle.classList.toggle('active', !collapsed);
+  if (pdfViewer && pdfState.available && pdfState.open) pdfViewer.relayout();
+  if (latexEditor) setTimeout(() => latexEditor.layout(), 0);
+}
+(function initSidebarCollapsed() {
+  let c = false;
+  try { c = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1'; } catch { /* ignore */ }
+  applySidebarCollapsed(c);
+})();
+function setSidebarCollapsed(collapsed) {
+  applySidebarCollapsed(collapsed);
+  try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? '1' : '0'); } catch { /* ignore */ }
+}
+if (sidebarToggle) sidebarToggle.addEventListener('click', () => {
+  setSidebarCollapsed(!appLayout.classList.contains('sidebar-collapsed'));
+});
+const sidebarCollapse = $('sidebarCollapse');
+if (sidebarCollapse) sidebarCollapse.addEventListener('click', () => setSidebarCollapsed(true));
+
+// LaTeX 전체화면 모드 (사이드바·상단바 숨김)
+const latexFullscreenBtn = $('latexFullscreenBtn');
+function setLatexFullscreen(on) {
+  document.body.classList.toggle('latex-fullscreen', !!on);
+  if (latexFullscreenBtn) {
+    latexFullscreenBtn.classList.toggle('active', !!on);
+    latexFullscreenBtn.textContent = on ? '⛶ 해제' : '⛶ 전체화면';
+  }
+  if (pdfViewer && pdfState.available && pdfState.open) pdfViewer.relayout();
+  if (latexEditor) setTimeout(() => latexEditor.layout(), 0);
+}
+if (latexFullscreenBtn) latexFullscreenBtn.addEventListener('click', () => {
+  setLatexFullscreen(!document.body.classList.contains('latex-fullscreen'));
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.body.classList.contains('latex-fullscreen')) setLatexFullscreen(false);
+});
+
 for (const tab of workspaceTabs) {
   tab.addEventListener('click', () => setWorkspaceTab(tab.getAttribute('data-workspace-tab')));
 }
@@ -2610,6 +2685,51 @@ if (latexCtxMenu) latexCtxMenu.addEventListener('click', (e) => {
   else if (act === 'newfile') startNewLatexEntry(dir, 'file');
   else if (act === 'newfolder') startNewLatexEntry(dir, 'folder');
 });
+
+// 파일 트리 드래그&드롭 이동 (위임 — 컨테이너는 재렌더돼도 유지)
+let latexDragPath = null;
+function clearDropHighlight() {
+  if (!latexFileTree) return;
+  latexFileTree.querySelectorAll('.drop-target').forEach((el) => el.classList.remove('drop-target'));
+  latexFileTree.classList.remove('drop-root');
+}
+function clearLatexDragState() {
+  latexDragPath = null;
+  if (latexFileTree) latexFileTree.querySelectorAll('.dragging').forEach((el) => el.classList.remove('dragging'));
+  clearDropHighlight();
+}
+if (latexFileTree) {
+  latexFileTree.addEventListener('dragstart', (e) => {
+    const btn = e.target.closest('.latex-file[data-path]');
+    if (!btn) return;
+    latexDragPath = btn.dataset.path;
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('application/x-paa-path', latexDragPath); } catch { /* ignore */ }
+    btn.classList.add('dragging');
+  });
+  latexFileTree.addEventListener('dragover', (e) => {
+    if (latexDragPath == null) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const det = e.target.closest('details.latex-dir');
+    latexFileTree.querySelectorAll('.drop-target').forEach((el) => el.classList.remove('drop-target'));
+    if (det) { det.classList.add('drop-target'); latexFileTree.classList.remove('drop-root'); }
+    else latexFileTree.classList.add('drop-root');
+  });
+  latexFileTree.addEventListener('dragleave', (e) => {
+    if (!latexFileTree.contains(e.relatedTarget)) clearDropHighlight();
+  });
+  latexFileTree.addEventListener('drop', (e) => {
+    if (latexDragPath == null) return;
+    e.preventDefault();
+    const det = e.target.closest('details.latex-dir');
+    const dir = det ? (det.querySelector(':scope > summary')?.dataset.dirpath || '') : '';
+    const from = latexDragPath;
+    clearLatexDragState();
+    moveLatexPath(from, dir);
+  });
+  latexFileTree.addEventListener('dragend', clearLatexDragState);
+}
 document.addEventListener('click', (e) => {
   if (latexCtxMenu && !latexCtxMenu.hidden && !latexCtxMenu.contains(e.target)) closeLatexCtxMenu();
 });

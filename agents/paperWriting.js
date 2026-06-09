@@ -26,17 +26,26 @@ function stripFence(text) {
   return f !== null ? f : text;
 }
 
-// 모듈 1회 실행: 프롬프트 채우고 LLM 호출 → {content, note}
+// 모듈 1회 실행: 프롬프트 채우고 LLM 호출 → {content, note}.
+// 코드블록(수정된 전체 파일)을 못 찾으면 형식 리마인더와 함께 1회 재시도.
+const FENCE_REMINDER = '\n\n[중요] 반드시 수정된 **전체 파일 내용**을 하나의 ```latex 코드블록으로 반환하세요. 변경이 없어도 파일 전체를 코드블록에 담아야 합니다. 설명만 적고 코드블록을 빠뜨리지 마세요.';
 async function runModule(promptKey, roleName, vars) {
   const prompts = await getPrompts();
   const tpl = prompts[promptKey];
   if (!tpl) throw new Error(`프롬프트 없음: ${promptKey}`);
   const role = llmConfig.getRole(roleName);
-  const out = await callLLM(fillTemplate(tpl, vars), {
-    backend: role.backend, model: role.model, reasoningEffort: role.reasoningEffort, timeoutMs: 600_000,
-  });
-  const edited = extractFenced(out);
-  if (edited === null) throw new Error('AI 응답에서 코드블록(수정된 파일)을 찾지 못했습니다.');
+  const filled = fillTemplate(tpl, vars);
+  const opts = { backend: role.backend, model: role.model, reasoningEffort: role.reasoningEffort, timeoutMs: 600_000 };
+
+  let out = await callLLM(filled, opts);
+  let edited = extractFenced(out);
+  if (edited === null) { // 형식 슬립 → 리마인더 붙여 1회 재시도
+    out = await callLLM(filled + FENCE_REMINDER, opts);
+    edited = extractFenced(out);
+  }
+  if (edited === null) {
+    throw new Error('AI가 수정된 전체 파일(```latex 코드블록)을 반환하지 않았습니다. 파일이 너무 크거나(출력 잘림) 형식 오류일 수 있어요.');
+  }
   const note = (out.split('```')[0] || '').trim() || '수정 완료';
   return { content: edited.replace(/\s*$/, '') + '\n', note };
 }
@@ -54,9 +63,15 @@ async function collectBibKeys(projectId) {
   return [...new Set(keys)];
 }
 
-// 프로젝트의 모든 .tex 내용을 합쳐 반환(근거 탐색용 문서 텍스트)
-async function collectProjectText(projectId) {
-  const files = (await latexProject.listFiles(projectId)).filter(f => /\.tex$/i.test(f.path));
+// 프로젝트의 모든 .tex 내용을 합쳐 반환(근거 탐색용 문서 텍스트).
+// 메인 파일을 맨 앞에 둬서, journalnames.tex 같은 긴 보일러플레이트가 본문을 밀어내지 않게 한다.
+async function collectProjectText(projectId, mainFile) {
+  const files = (await latexProject.listFiles(projectId)).filter(f => !f.dir && /\.tex$/i.test(f.path));
+  files.sort((a, b) => {
+    const am = a.path === mainFile ? 0 : 1;
+    const bm = b.path === mainFile ? 0 : 1;
+    return am - bm || a.path.localeCompare(b.path);
+  });
   let txt = '';
   for (const f of files) {
     try {
@@ -84,32 +99,6 @@ function formatHistory(history) {
   }).join('\n');
 }
 
-// 범위 지정: 지시가 국소적이면 수정할 줄 범위만 찾아 반환(토큰 절약).
-// 짧은 파일/모호한 지시/실패 시 'whole' 로 폴백.
-const SCOPE_MIN_LINES = 60;
-async function locateScope(content, instruction, history = '(이전 대화 없음)') {
-  const lines = content.split('\n');
-  if (lines.length < SCOPE_MIN_LINES) return { scope: 'whole' };
-  const prompts = await getPrompts();
-  if (!prompts.scopeLocator) return { scope: 'whole' };
-  const numbered = lines.map((l, i) => `${i + 1}\t${l}`).join('\n');
-  const role = llmConfig.getRole('scopeLocator');
-  try {
-    const out = await callLLM(fillTemplate(prompts.scopeLocator, { numberedContent: numbered, instruction, history }), {
-      backend: role.backend, model: role.model, reasoningEffort: role.reasoningEffort, timeoutMs: 120_000,
-    });
-    const j = JSON.parse(stripFence(out));
-    if (j.scope === 'range') {
-      const s = parseInt(j.startLine, 10);
-      const e = parseInt(j.endLine, 10);
-      if (Number.isFinite(s) && Number.isFinite(e) && s >= 1 && e >= s && e <= lines.length) {
-        return { scope: 'range', startLine: s, endLine: e };
-      }
-    }
-  } catch { /* 폴백 */ }
-  return { scope: 'whole' };
-}
-
 // Planner: 텍스트 계획 반환(코드블록 없음)
 async function planStep(moduleType, fileName, content, instruction, history = '(이전 대화 없음)') {
   const prompts = await getPrompts();
@@ -128,21 +117,26 @@ async function multiAgentEdit({ module, fileName, content, instruction, onStep, 
   onStep({ stage: 'write', label: `✍️ ${sel.type} 작성 중…` });
   const draft = await runModule(sel.prompt, sel.role, { fileName, content, instruction, plan, history });
   onStep({ stage: 'review', label: '🔍 검토 중…' });
-  const reviewed = await runModule('writeReview', 'writeReview', { fileName, content: draft.content, instruction, plan, history });
-  return { content: reviewed.content, note: `[계획→작성→검토] ${reviewed.note}` };
+  // 검토는 비치명적: 검토가 코드블록을 안 돌려주면(수정 불필요 등) 작성 초안을 그대로 채택.
+  try {
+    const reviewed = await runModule('writeReview', 'writeReview', { fileName, content: draft.content, instruction, plan, history });
+    return { content: reviewed.content, note: `[계획→작성→검토] ${reviewed.note}` };
+  } catch {
+    return { content: draft.content, note: `[계획→작성] ${draft.note} (검토 생략)` };
+  }
 }
 
 const MODLABEL = { writing: '✍️ 본문', figure: '📊 그림·표', citation: '📚 인용', evidence: '🔎 근거탐색', research: '🌐 리서치' };
 const MAX_STEPS = 4;
 
 // 웹 리서치 1회 → 답변 텍스트. 준 URL을 WebFetch로 읽음(claude 웹도구).
-async function runResearchStep(projectId, rawInstruction, stepInstruction) {
+async function runResearchStep(projectId, rawInstruction, stepInstruction, mainFile) {
   const urlSet = new Set();
   for (const src of [rawInstruction, stepInstruction]) {
     for (const m of (String(src || '').match(/https?:\/\/[^\s)>\]]+/g) || [])) urlSet.add(m);
   }
   const urls = [...urlSet];
-  const docText = (await collectProjectText(projectId)).slice(0, 40000);
+  const docText = (await collectProjectText(projectId, mainFile)).slice(0, 60000);
   const prompts = await getPrompts();
   const role = llmConfig.getRole('research');
   const useClaude = role.backend === 'claude';
@@ -164,26 +158,26 @@ async function runResearchStep(projectId, rawInstruction, stepInstruction) {
   }
 }
 
-// 편집 단계 1회(writing/figure/citation) → {content, note}. 범위 지정으로 부분만 수정.
+// 일반 채팅(읽기 전용) → 답변 텍스트. 전문 모듈에 안 맞는 요청을 튜닝 없는 도우미가 답함.
+async function runChatStep(question, history) {
+  const prompts = await getPrompts();
+  const role = llmConfig.getRole('writeChat');
+  try {
+    const out = await callLLM(fillTemplate(prompts.writeChat, { question, history: history || '(이전 대화 없음)' }), {
+      backend: role.backend, model: role.model, reasoningEffort: role.reasoningEffort, timeoutMs: 180_000,
+    });
+    return (out || '').trim();
+  } catch (err) {
+    return `답변 생성에 실패했습니다: ${err.message}`;
+  }
+}
+
+// 편집 단계 1회(writing/figure/citation) → {content, note}. 전문을 다 읽고 수정한다(전체 흐름 일관성).
 async function runEditStep({ projectId, file, module, content, instruction, history, onStep }) {
   if (module === 'citation') {
     onStep({ stage: 'citation', label: '📚 인용 채우는 중…' });
     const bibKeys = (await collectBibKeys(projectId)).join(', ') || '(없음)';
     return runModule('writeCitation', 'writeCitation', { fileName: file, content, instruction, bibKeys });
-  }
-  const sc = await locateScope(content, instruction, history);
-  if (sc.scope === 'range') {
-    onStep({ stage: 'scope', label: `🎯 ${sc.startLine}–${sc.endLine}줄만 수정 (범위 한정)` });
-    const lines = content.split('\n');
-    const slice = lines.slice(sc.startLine - 1, sc.endLine).join('\n');
-    const excerptNote =
-      `아래 내용은 더 큰 .tex 파일의 ${sc.startLine}–${sc.endLine}줄 "발췌"입니다. ` +
-      `이 발췌 범위만 수정해서 발췌 전체를(수정 반영해) 그대로 반환하세요. ` +
-      `프리앰블·\\begin{document}·문서 구조를 새로 추가하지 말고, 발췌 밖은 건드리지 마세요.\n\n${instruction}`;
-    const ed = await multiAgentEdit({ module, fileName: file, content: slice, instruction: excerptNote, onStep, history });
-    const editedLines = ed.content.replace(/\n+$/, '').split('\n');
-    const newLines = [...lines.slice(0, sc.startLine - 1), ...editedLines, ...lines.slice(sc.endLine)];
-    return { content: newLines.join('\n') + (content.endsWith('\n') ? '\n' : ''), note: `[${sc.startLine}–${sc.endLine}줄] ${ed.note}` };
   }
   return multiAgentEdit({ module, fileName: file, content, instruction, onStep, history });
 }
@@ -212,7 +206,7 @@ export async function runPaperWriting({ projectId, file, mainFile, instruction, 
     else if (j.module) steps = [{ module: j.module, instruction: j.refinedInstruction || instruction }];
   } catch { /* 실패 → 기본 writing */ }
   steps = steps
-    .filter(s => s && ['writing', 'figure', 'citation', 'evidence', 'research'].includes(s.module) && typeof s.instruction === 'string' && s.instruction.trim())
+    .filter(s => s && ['writing', 'figure', 'citation', 'evidence', 'research', 'chat'].includes(s.module) && typeof s.instruction === 'string' && s.instruction.trim())
     .slice(0, MAX_STEPS);
   if (!steps.length) steps = [{ module: 'writing', instruction }];
 
@@ -230,15 +224,21 @@ export async function runPaperWriting({ projectId, file, mainFile, instruction, 
     const tag = steps.length > 1 ? `(${i + 1}/${steps.length}) ` : '';
     if (st.module === 'evidence') {
       onStep({ stage: 'step', label: `${tag}🔎 근거 탐색…` });
-      const docText = await collectProjectText(projectId);
+      const docText = await collectProjectText(projectId, mainFile);
       const ans = await findEvidence({ documentText: docText, question: st.instruction });
       readOnlyAnswers.push(`🔎 [근거 탐색]\n${ans}`);
       priorContext += `\n[근거 탐색 결과] ${ans}\n`;
     } else if (st.module === 'research') {
       onStep({ stage: 'step', label: `${tag}🌐 웹 리서치…` });
-      const ans = await runResearchStep(projectId, instruction, st.instruction);
+      const ans = await runResearchStep(projectId, instruction, st.instruction, mainFile);
       readOnlyAnswers.push(`🌐 [웹 리서치]\n${ans}`);
       priorContext += `\n[웹 리서치 결과] ${ans}\n`;
+    } else if (st.module === 'chat') {
+      onStep({ stage: 'step', label: `${tag}💬 답변 생성…` });
+      const ctx = convHistory + (priorContext ? `\n\n[이전 단계 결과]\n${priorContext}` : '');
+      const ans = await runChatStep(st.instruction, ctx);
+      readOnlyAnswers.push(`💬 ${ans}`);
+      priorContext += `\n[채팅 답변] ${ans}\n`;
     } else {
       onStep({ stage: 'step', label: `${tag}${MODLABEL[st.module]} 작성…` });
       const curContent = await latexProject.readProjectFile(projectId, file);
