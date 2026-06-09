@@ -519,13 +519,13 @@ const PROMPT_FIELDS = {
   // 분석팀 공용 — 근거 탐색(작성팀에서도 사용)
   evidence: $('promptEvidence'),
   // 논문 작성팀 (본문/그림은 계획→작성→검토 멀티에이전트)
-  writeOrchestrator: $('promptWriteOrchestrator'), scopeLocator: $('promptScopeLocator'), writePlan: $('promptWritePlan'),
+  writeOrchestrator: $('promptWriteOrchestrator'), writePlan: $('promptWritePlan'),
   writeBody: $('promptWriteBody'), writeFigure: $('promptWriteFigure'), writeReview: $('promptWriteReview'),
   writeCitation: $('promptWriteCitation'), writeCompile: $('promptWriteCompile'), research: $('promptResearch'), writeChat: $('promptWriteChat'),
 };
 const LLM_ROLES = [
   'orchestrator', 'analyst', 'verifier', 'writer', 'coreInsight', 'chat', 'evidence',
-  'writeOrchestrator', 'scopeLocator', 'writePlan', 'writeBody', 'writeFigure', 'writeReview', 'writeCitation', 'writeCompile', 'research', 'writeChat',
+  'writeOrchestrator', 'writePlan', 'writeBody', 'writeFigure', 'writeReview', 'writeCitation', 'writeCompile', 'research', 'writeChat',
 ];
 const saveLlmBtn = $('saveLlmBtn');
 const resetLlmBtn = $('resetLlmBtn');

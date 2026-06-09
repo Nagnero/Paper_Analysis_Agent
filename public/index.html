@@ -302,13 +302,6 @@
         <!-- 작성팀 · 팀원 에이전트 -->
         <div class="settings-pane" data-team="writing" data-section="agents">
           <p class="llm-hint">본문·그림/표 모듈은 <b>계획 → 작성 → 검토</b> 멀티에이전트로 동작합니다(STORM식). 인용은 단일, 컴파일 수정은 변경 시마다 항상 실행.</p>
-          <details class="team-agent">
-            <summary>범위 지정 (Scope) — 특정 부분만 수정 시 그 줄 범위만 찾아 토큰 절약 (기본 Haiku)</summary>
-            <div class="team-agent-body">
-              <textarea id="promptScopeLocator" spellcheck="false"></textarea>
-              <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="scopeLocator">기본값으로 채우기 (저장 필요)</button></div>
-            </div>
-          </details>
           <details class="team-agent" open>
             <summary>계획 (Planner) — 작성 전 개요·계획 수립 (본문·그림 공용)</summary>
             <div class="team-agent-body">
@@ -371,12 +364,6 @@
           <p class="llm-hint">작성팀 에이전트별 백엔드·모델·추론 강도.</p>
           <div class="llm-row" data-role="writeOrchestrator">
             <label>작성 오케스트레이터</label>
-            <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
-            <select class="llm-model"></select>
-            <select class="llm-reasoning"></select>
-          </div>
-          <div class="llm-row" data-role="scopeLocator">
-            <label>범위 지정 (Scope)</label>
             <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
             <select class="llm-model"></select>
             <select class="llm-reasoning"></select>
