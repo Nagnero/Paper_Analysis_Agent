@@ -132,76 +132,136 @@ async function multiAgentEdit({ module, fileName, content, instruction, onStep, 
   return { content: reviewed.content, note: `[계획→작성→검토] ${reviewed.note}` };
 }
 
-/**
- * @param {{ projectId:number, file:string, mainFile:string, instruction:string }} args
- * @returns {Promise<{module:string, note:string, content:string, file:string, compiled:boolean, fixes:number, log:string}>}
- */
-export async function runPaperWriting({ projectId, file, mainFile, instruction, history = [], onStep = () => {} }) {
-  const content = await latexProject.readProjectFile(projectId, file);
-  if (content.length > MAX_CHARS) throw new Error(`파일이 너무 큽니다(${content.length}자, 최대 ${MAX_CHARS}).`);
-  const historyText = formatHistory(history);
+const MODLABEL = { writing: '✍️ 본문', figure: '📊 그림·표', citation: '📚 인용', evidence: '🔎 근거탐색', research: '🌐 리서치' };
+const MAX_STEPS = 4;
 
-  // 1) 오케스트레이터: 모듈 분류 + 지시 다듬기 (이전 대화 참고 — "그 부분", "알아서 수정" 해석)
-  let module = 'writing';
-  let refined = instruction;
-  onStep({ stage: 'orchestrate', label: '🧭 지시 분석·모듈 분류 중…' });
-  try {
-    const prompts = await getPrompts();
-    const orchRole = llmConfig.getRole('writeOrchestrator');
-    const out = await callLLM(fillTemplate(prompts.writeOrchestrator, { fileName: file, instruction, history: historyText }), {
-      backend: orchRole.backend, model: orchRole.model, reasoningEffort: orchRole.reasoningEffort, timeoutMs: 120_000,
-    });
-    const j = JSON.parse(stripFence(out));
-    if (['writing', 'figure', 'citation', 'evidence'].includes(j.module)) module = j.module;
-    if (typeof j.refinedInstruction === 'string' && j.refinedInstruction.trim()) refined = j.refinedInstruction.trim();
-  } catch { /* 분류 실패 → writing + 원지시 */ }
-
-  const moduleLabel = { writing: '✍️ 본문', figure: '📊 그림/표', citation: '📚 인용', evidence: '🔎 근거 탐색' }[module] || module;
-  onStep({ stage: 'route', label: `🧭 ${moduleLabel} 모듈로 처리`, module });
-
-  // 근거 탐색(읽기 전용): 파일 수정·컴파일 없이 프로젝트 .tex에서 답만 찾는다.
-  if (module === 'evidence') {
-    onStep({ stage: 'evidence', label: '🔎 논문에서 근거 찾는 중…' });
-    const docText = await collectProjectText(projectId);
-    const answer = await findEvidence({ documentText: docText, question: refined });
-    return {
-      module, readOnly: true, answer, note: answer, file,
-      content, compiled: null, fixes: 0, log: '',
-    };
+// 웹 리서치 1회 → 답변 텍스트. 준 URL을 WebFetch로 읽음(claude 웹도구).
+async function runResearchStep(projectId, rawInstruction, stepInstruction) {
+  const urlSet = new Set();
+  for (const src of [rawInstruction, stepInstruction]) {
+    for (const m of (String(src || '').match(/https?:\/\/[^\s)>\]]+/g) || [])) urlSet.add(m);
   }
+  const urls = [...urlSet];
+  const docText = (await collectProjectText(projectId)).slice(0, 40000);
+  const prompts = await getPrompts();
+  const role = llmConfig.getRole('research');
+  const useClaude = role.backend === 'claude';
+  try {
+    const out = await callLLM(fillTemplate(prompts.research, {
+      urls: urls.length ? urls.join('\n') : '(URL 없음 — 필요하면 WebSearch로 검색)',
+      document: docText || '(논문 내용 없음)',
+      question: stepInstruction,
+    }), {
+      backend: 'claude', // 웹(WebFetch/WebSearch)은 claude 백엔드에서만
+      model: useClaude ? role.model : undefined,
+      reasoningEffort: useClaude ? role.reasoningEffort : undefined,
+      allowedTools: ['WebFetch', 'WebSearch'],
+      timeoutMs: 300_000,
+    });
+    return (out || '').trim();
+  } catch (err) {
+    return `웹 리서치에 실패했습니다: ${err.message} (claude 로그인/웹 도구 사용 가능 여부 확인)`;
+  }
+}
 
-  // 2) 모듈 실행 — 본문/그림은 멀티에이전트(계획→작성→검토), 인용은 단일
-  let edit;
+// 편집 단계 1회(writing/figure/citation) → {content, note}. 범위 지정으로 부분만 수정.
+async function runEditStep({ projectId, file, module, content, instruction, history, onStep }) {
   if (module === 'citation') {
     onStep({ stage: 'citation', label: '📚 인용 채우는 중…' });
     const bibKeys = (await collectBibKeys(projectId)).join(', ') || '(없음)';
-    edit = await runModule('writeCitation', 'writeCitation', { fileName: file, content, instruction: refined, bibKeys });
-  } else {
-    // 범위 지정: 특정 부분만 수정하면 그 슬라이스만 보고 작성(토큰 절약)
-    const sc = await locateScope(content, refined, historyText);
-    if (sc.scope === 'range') {
-      onStep({ stage: 'scope', label: `🎯 ${sc.startLine}–${sc.endLine}줄만 수정 (범위 한정)` });
-      const lines = content.split('\n');
-      const slice = lines.slice(sc.startLine - 1, sc.endLine).join('\n');
-      const excerptNote =
-        `아래 내용은 더 큰 .tex 파일의 ${sc.startLine}–${sc.endLine}줄 "발췌"입니다. ` +
-        `이 발췌 범위만 수정해서 발췌 전체를(수정 반영해) 그대로 반환하세요. ` +
-        `프리앰블·\\begin{document}·문서 구조를 새로 추가하지 말고, 발췌 밖은 건드리지 마세요.\n\n${refined}`;
-      const ed = await multiAgentEdit({ module, fileName: file, content: slice, instruction: excerptNote, onStep, history: historyText });
-      const editedLines = ed.content.replace(/\n+$/, '').split('\n');
-      const newLines = [...lines.slice(0, sc.startLine - 1), ...editedLines, ...lines.slice(sc.endLine)];
-      edit = { content: newLines.join('\n') + (content.endsWith('\n') ? '\n' : ''), note: `[${sc.startLine}–${sc.endLine}줄] ${ed.note}` };
+    return runModule('writeCitation', 'writeCitation', { fileName: file, content, instruction, bibKeys });
+  }
+  const sc = await locateScope(content, instruction, history);
+  if (sc.scope === 'range') {
+    onStep({ stage: 'scope', label: `🎯 ${sc.startLine}–${sc.endLine}줄만 수정 (범위 한정)` });
+    const lines = content.split('\n');
+    const slice = lines.slice(sc.startLine - 1, sc.endLine).join('\n');
+    const excerptNote =
+      `아래 내용은 더 큰 .tex 파일의 ${sc.startLine}–${sc.endLine}줄 "발췌"입니다. ` +
+      `이 발췌 범위만 수정해서 발췌 전체를(수정 반영해) 그대로 반환하세요. ` +
+      `프리앰블·\\begin{document}·문서 구조를 새로 추가하지 말고, 발췌 밖은 건드리지 마세요.\n\n${instruction}`;
+    const ed = await multiAgentEdit({ module, fileName: file, content: slice, instruction: excerptNote, onStep, history });
+    const editedLines = ed.content.replace(/\n+$/, '').split('\n');
+    const newLines = [...lines.slice(0, sc.startLine - 1), ...editedLines, ...lines.slice(sc.endLine)];
+    return { content: newLines.join('\n') + (content.endsWith('\n') ? '\n' : ''), note: `[${sc.startLine}–${sc.endLine}줄] ${ed.note}` };
+  }
+  return multiAgentEdit({ module, fileName: file, content, instruction, onStep, history });
+}
+
+/**
+ * 정적 다단계 코디네이터: 오케스트레이터가 단계 목록(steps)을 세우고 순서대로 실행한다.
+ * 읽기전용 단계(research/evidence)의 결과는 이후 편집 단계의 컨텍스트로 전달된다.
+ * @param {{ projectId:number, file:string, mainFile:string, instruction:string, history?:Array, onStep?:Function }} args
+ */
+export async function runPaperWriting({ projectId, file, mainFile, instruction, history = [], onStep = () => {} }) {
+  const originalContent = await latexProject.readProjectFile(projectId, file);
+  if (originalContent.length > MAX_CHARS) throw new Error(`파일이 너무 큽니다(${originalContent.length}자, 최대 ${MAX_CHARS}).`);
+  const convHistory = formatHistory(history);
+
+  // 1) 오케스트레이터: 다단계 계획(steps) 수립 (이전 대화 참고)
+  onStep({ stage: 'orchestrate', label: '🧭 지시 분석·계획 중…' });
+  let steps = [];
+  try {
+    const prompts = await getPrompts();
+    const orchRole = llmConfig.getRole('writeOrchestrator');
+    const out = await callLLM(fillTemplate(prompts.writeOrchestrator, { fileName: file, instruction, history: convHistory }), {
+      backend: orchRole.backend, model: orchRole.model, reasoningEffort: orchRole.reasoningEffort, timeoutMs: 120_000,
+    });
+    const j = JSON.parse(stripFence(out));
+    if (Array.isArray(j.steps)) steps = j.steps;
+    else if (j.module) steps = [{ module: j.module, instruction: j.refinedInstruction || instruction }];
+  } catch { /* 실패 → 기본 writing */ }
+  steps = steps
+    .filter(s => s && ['writing', 'figure', 'citation', 'evidence', 'research'].includes(s.module) && typeof s.instruction === 'string' && s.instruction.trim())
+    .slice(0, MAX_STEPS);
+  if (!steps.length) steps = [{ module: 'writing', instruction }];
+
+  onStep({ stage: 'plan', label: `🧭 계획: ${steps.map(s => MODLABEL[s.module] || s.module).join(' → ')}`, steps: steps.map(s => s.module) });
+
+  // 2) 단계별 실행 — 읽기전용 결과를 이후 편집 단계 컨텍스트로 전달
+  const readOnlyAnswers = [];
+  const editNotes = [];
+  let priorContext = '';
+  let edited = false;
+  let lastEditModule = 'writing';
+
+  for (let i = 0; i < steps.length; i++) {
+    const st = steps[i];
+    const tag = steps.length > 1 ? `(${i + 1}/${steps.length}) ` : '';
+    if (st.module === 'evidence') {
+      onStep({ stage: 'step', label: `${tag}🔎 근거 탐색…` });
+      const docText = await collectProjectText(projectId);
+      const ans = await findEvidence({ documentText: docText, question: st.instruction });
+      readOnlyAnswers.push(`🔎 [근거 탐색]\n${ans}`);
+      priorContext += `\n[근거 탐색 결과] ${ans}\n`;
+    } else if (st.module === 'research') {
+      onStep({ stage: 'step', label: `${tag}🌐 웹 리서치…` });
+      const ans = await runResearchStep(projectId, instruction, st.instruction);
+      readOnlyAnswers.push(`🌐 [웹 리서치]\n${ans}`);
+      priorContext += `\n[웹 리서치 결과] ${ans}\n`;
     } else {
-      edit = await multiAgentEdit({ module, fileName: file, content, instruction: refined, onStep, history: historyText });
+      onStep({ stage: 'step', label: `${tag}${MODLABEL[st.module]} 작성…` });
+      const curContent = await latexProject.readProjectFile(projectId, file);
+      const stepHistory = convHistory + (priorContext ? `\n\n[이번 작업의 이전 단계 결과 — 반영할 것]\n${priorContext}` : '');
+      const ed = await runEditStep({ projectId, file, module: st.module, content: curContent, instruction: st.instruction, history: stepHistory, onStep });
+      await latexProject.writeProjectFile(projectId, file, ed.content);
+      edited = true;
+      lastEditModule = st.module;
+      editNotes.push(`${MODLABEL[st.module]} ${ed.note}`);
     }
   }
-  await latexProject.writeProjectFile(projectId, file, edit.content);
 
-  // 3) 컴파일 게이트 + 에러 수정 루프
+  // 읽기 전용만 수행 → 답변 반환(파일·컴파일 변경 없음)
+  if (!edited) {
+    const answer = readOnlyAnswers.join('\n\n') || '(결과 없음)';
+    return { module: steps[steps.length - 1].module, readOnly: true, answer, note: answer, file, content: originalContent, compiled: null, fixes: 0, log: '' };
+  }
+
+  // 3) 컴파일 게이트 + 에러 수정 루프 (모든 편집 후 1회)
   onStep({ stage: 'compile', label: '🔧 컴파일 중…' });
   let compile = await compileProject(projectId, mainFile, { timeoutMs: 180_000 });
   let fixes = 0;
-  let finalContent = edit.content;
+  let finalContent = await latexProject.readProjectFile(projectId, file);
   while (!compile.hasPdf && fixes < MAX_COMPILE_FIXES) {
     fixes++;
     onStep({ stage: 'fix', label: `🔧 컴파일 오류 수정 중… (${fixes}회)` });
@@ -216,11 +276,11 @@ export async function runPaperWriting({ projectId, file, mainFile, instruction, 
     compile = await compileProject(projectId, mainFile, { timeoutMs: 180_000 });
   }
 
-  let note = edit.note;
-  if (fixes > 0) note += compile.hasPdf ? ` (컴파일 오류 ${fixes}회 자동 수정)` : ` (컴파일 오류 자동 수정 ${fixes}회 시도했으나 실패 — 로그 확인)`;
+  let note = [...readOnlyAnswers, ...editNotes].join('\n\n');
+  if (fixes > 0) note += compile.hasPdf ? `\n(컴파일 오류 ${fixes}회 자동 수정)` : `\n(컴파일 오류 자동 수정 ${fixes}회 시도했으나 실패 — 로그 확인)`;
 
   return {
-    module,
+    module: lastEditModule,
     note,
     content: finalContent,
     file,

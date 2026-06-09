@@ -80,8 +80,11 @@ ${images.map((imagePath, i) => `- image ${i + 1}: ${imagePath}`).join('\n')}`;
       for (const dir of [...new Set(images.map(imagePath => path.dirname(imagePath)))]) {
         args.push('--add-dir', dir);
       }
-      args.push('--allowedTools', 'Read');
     }
+    // 허용 도구: 이미지가 있으면 Read, 그 외 opts.allowedTools(예: WebFetch/WebSearch).
+    const allowed = new Set(Array.isArray(opts.allowedTools) ? opts.allowedTools : []);
+    if (images.length) allowed.add('Read');
+    if (allowed.size) args.push('--allowedTools', [...allowed].join(','));
 
     const startedAt = Date.now();
     return await new Promise((resolve, reject) => {

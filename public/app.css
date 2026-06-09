@@ -1590,6 +1590,15 @@ button { font-family: inherit; }
   flex: 0 0 200px; min-width: 120px; overflow: auto;
   border-right: 1px solid var(--border); background: #15171c; padding: 6px 0;
 }
+.latex-filetree[hidden] { display: none; }
+.latex-tree-toggle { margin-right: 4px; }
+.latex-btn.active { color: var(--accent); border-color: var(--accent); }
+/* 새 파일 인라인 입력 */
+.latex-newfile { padding: 4px 8px; }
+.latex-newfile input {
+  width: 100%; box-sizing: border-box; background: var(--bg); color: var(--text);
+  border: 1px solid var(--accent); border-radius: 4px; padding: 3px 6px; font: inherit; font-size: 12px; outline: none;
+}
 .latex-file {
   display: block; width: 100%; text-align: left; border: 0; background: transparent;
   color: var(--text); font: inherit; font-size: 12px; padding: 4px 12px; cursor: pointer;
@@ -1620,7 +1629,20 @@ button { font-family: inherit; }
   max-width: 100%; object-fit: contain; background: #fff;
   border: 1px solid var(--border); border-radius: 4px;
 }
+.latex-asset-view .latex-asset-frame { flex: 1; width: 100%; min-height: 0; border: 0; background: #fff; border-radius: 4px; }
 .latex-asset-cap { font-size: 11.5px; color: var(--muted); font-family: ui-monospace, Menlo, Consolas, monospace; word-break: break-all; }
+/* 파일 트리 우클릭 메뉴 */
+.latex-ctx {
+  position: fixed; z-index: 1000; min-width: 120px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5); padding: 4px;
+}
+.latex-ctx[hidden] { display: none; }
+.latex-ctx button {
+  display: block; width: 100%; text-align: left; border: 0; background: transparent;
+  color: var(--text); font: inherit; font-size: 12.5px; padding: 6px 10px; border-radius: 5px; cursor: pointer;
+}
+.latex-ctx button:hover { background: var(--surface-2); color: #ff8585; }
 .latex-jump-line { background: rgba(255, 213, 0, 0.22); }
 .latex-log {
   flex-shrink: 0; max-height: 38%; display: flex; flex-direction: column;
@@ -1678,12 +1700,13 @@ body.resizing-chat { cursor: row-resize; user-select: none; }
 .latex-chat-msg.ai.error { background: rgba(255, 80, 80, 0.12); color: #ff8585; }
 .latex-chat-msg.working { animation: latexChatPulse 1.2s ease-in-out infinite; }
 @keyframes latexChatPulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
-.latex-chat-input { display: flex; gap: 6px; padding: 8px 10px; }
-.latex-chat-input input {
+.latex-chat-input { display: flex; gap: 6px; padding: 8px 10px; align-items: flex-end; }
+.latex-chat-input textarea {
   flex: 1; min-width: 0; background: var(--bg); color: var(--text);
   border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; font: inherit; font-size: 12.5px; outline: none;
+  resize: none; line-height: 1.4; max-height: 160px; overflow-y: auto; min-height: 34px;
 }
-.latex-chat-input input:focus { border-color: var(--accent); }
+.latex-chat-input textarea:focus { border-color: var(--accent); }
 
 /* 사이드바 LaTeX 섹션 — 라이브러리와 공간을 반반 분할 */
 .latex-tree { flex: 1 1 0; min-height: 0; }

@@ -32,7 +32,7 @@
     <div id="mainArea">
       <header class="top">
         <div class="top-inner">
-          <div class="brand">Korean Paper Agent Console <span class="ver">v0.5.1</span></div>
+          <div class="brand">Korean Paper Agent Console <span class="ver">v0.5.2</span></div>
           <div class="top-actions">
             <button type="button" id="pdfToggleBtn" class="pdf-toggle" title="논문 보기/숨기기" hidden>📄 논문</button>
           </div>
@@ -90,6 +90,7 @@
         </section>
         <section id="latexPane" class="latex-pane" hidden>
           <div class="latex-head">
+            <button type="button" id="latexTreeToggle" class="latex-btn latex-tree-toggle" title="파일 탐색기 접기/펼치기" aria-label="파일 탐색기 토글">☰</button>
             <span id="latexTitle" class="latex-title">LaTeX 프로젝트</span>
             <span id="latexSaveState" class="latex-savestate"></span>
             <span id="latexCompileStatus" class="latex-compile-status" hidden></span>
@@ -127,7 +128,7 @@
             </div>
             <div id="latexChatLog" class="latex-chat-log"></div>
             <div class="latex-chat-input">
-              <input id="latexChatInput" type="text" placeholder="AI에게 현재 파일 수정 지시 (예: introduction을 더 간결하게)" />
+              <textarea id="latexChatInput" rows="1" placeholder="AI에게 지시 (Enter 전송 · Shift+Enter 줄바꿈)"></textarea>
               <button type="button" id="latexChatSend" class="latex-btn primary" title="보내기">↑</button>
             </div>
           </div>
@@ -150,6 +151,8 @@
   <div id="dropOverlay" class="drop-overlay" hidden>
     <div class="drop-overlay-card">PDF를 여기에 놓으세요</div>
   </div>
+
+  <div id="latexCtxMenu" class="latex-ctx" hidden></div>
 
   <div id="contextMenu" class="context-menu" hidden>
     <button type="button" data-action="rename">이름 변경</button>
@@ -342,6 +345,13 @@
               <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="writeCompile">기본값으로 채우기 (저장 필요)</button></div>
             </div>
           </details>
+          <details class="team-agent">
+            <summary>리서치 (웹) — 준 URL/저널 스코프를 읽어 논문 방향 제안 (Claude 웹, 읽기 전용)</summary>
+            <div class="team-agent-body">
+              <textarea id="promptResearch" spellcheck="false"></textarea>
+              <div class="team-agent-foot"><button type="button" class="btn-ghost small" data-reset="research">기본값으로 채우기 (저장 필요)</button></div>
+            </div>
+          </details>
         </div>
         <!-- 작성팀 · 모델 -->
         <div class="settings-pane" data-team="writing" data-section="model">
@@ -390,6 +400,12 @@
           </div>
           <div class="llm-row" data-role="writeCompile">
             <label>컴파일 수정</label>
+            <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
+            <select class="llm-model"></select>
+            <select class="llm-reasoning"></select>
+          </div>
+          <div class="llm-row" data-role="research">
+            <label>리서치 (웹)</label>
             <select class="llm-backend"><option value="claude">Claude</option><option value="codex">Codex</option></select>
             <select class="llm-model"></select>
             <select class="llm-reasoning"></select>

@@ -854,7 +854,7 @@ async function handlePromptsPut(req, res) {
   const next = { ...current };
   const allowedPromptKeys = [
     'analyst', 'verifier', 'writer', 'orchestrator', 'coreInsight', 'evidence',
-    'writeOrchestrator', 'scopeLocator', 'writePlan', 'writeBody', 'writeFigure', 'writeReview', 'writeCitation', 'writeCompile',
+    'writeOrchestrator', 'scopeLocator', 'writePlan', 'writeBody', 'writeFigure', 'writeReview', 'writeCitation', 'writeCompile', 'research',
   ];
   for (const k of allowedPromptKeys) {
     if (k in payload) {
@@ -1296,8 +1296,58 @@ async function handleProjectPdf(req, res, id) {
 
 const ASSET_CONTENT_TYPE = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
-  '.webp': 'image/webp', '.bmp': 'image/bmp', '.svg': 'image/svg+xml',
+  '.webp': 'image/webp', '.bmp': 'image/bmp', '.svg': 'image/svg+xml', '.pdf': 'application/pdf',
 };
+
+// 새 빈 파일 생성(빈 공간/폴더 우클릭 → 새 파일)
+async function handleProjectFileCreate(req, res, id) {
+  try {
+    const project = await library.getProject(id);
+    if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+    const body = await readJsonBody(req, { maxBytes: 1 << 16 });
+    const rel = typeof body.path === 'string' ? body.path.trim() : '';
+    if (!rel) return jsonResponse(res, 400, { error: 'path required' });
+    const created = await latexProject.createProjectFile(id, rel);
+    await library.touchProject(id).catch(() => {});
+    const files = await latexProject.listFiles(id);
+    jsonResponse(res, 200, { ok: true, path: created, files });
+  } catch (err) {
+    jsonResponse(res, 400, { error: err.message });
+  }
+}
+
+// 새 폴더 생성(빈 공간/폴더 우클릭 → 새 폴더)
+async function handleProjectFolderCreate(req, res, id) {
+  try {
+    const project = await library.getProject(id);
+    if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+    const body = await readJsonBody(req, { maxBytes: 1 << 16 });
+    const rel = typeof body.path === 'string' ? body.path.trim() : '';
+    if (!rel) return jsonResponse(res, 400, { error: 'path required' });
+    const created = await latexProject.createProjectFolder(id, rel);
+    await library.touchProject(id).catch(() => {});
+    const files = await latexProject.listFiles(id);
+    jsonResponse(res, 200, { ok: true, path: created, files });
+  } catch (err) {
+    jsonResponse(res, 400, { error: err.message });
+  }
+}
+
+// 프로젝트 내 파일/폴더 삭제(우클릭 삭제)
+async function handleProjectFileDelete(req, res, id, relPath) {
+  try {
+    if (!relPath) return jsonResponse(res, 400, { error: 'path required' });
+    const project = await library.getProject(id);
+    if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+    if (relPath === project.main_file) return jsonResponse(res, 400, { error: '메인 파일은 삭제할 수 없습니다.' });
+    const deleted = await latexProject.deleteProjectPath(id, relPath);
+    await library.touchProject(id).catch(() => {});
+    const files = await latexProject.listFiles(id);
+    jsonResponse(res, 200, { ok: true, deleted, files });
+  } catch (err) {
+    jsonResponse(res, 400, { error: err.message });
+  }
+}
 
 // 이미지 등 바이너리 자산 원본 서빙 (미리보기용)
 async function handleProjectAssetGet(req, res, id, relPath) {
@@ -1396,7 +1446,10 @@ function handleProjectsDispatch(req, res) {
   if (sub === '/compile' && req.method === 'POST') return handleProjectCompile(req, res, id);
   if (sub === '/chat-edit' && req.method === 'POST') return handleProjectChatEdit(req, res, id);
   if (sub === '/file' && req.method === 'GET') return handleProjectFileGet(req, res, id, u.searchParams.get('path'));
+  if (sub === '/file' && req.method === 'POST') return handleProjectFileCreate(req, res, id);
+  if (sub === '/folder' && req.method === 'POST') return handleProjectFolderCreate(req, res, id);
   if (sub === '/file' && req.method === 'PUT') return handleProjectFilePut(req, res, id, u.searchParams.get('path'));
+  if (sub === '/file' && req.method === 'DELETE') return handleProjectFileDelete(req, res, id, u.searchParams.get('path'));
   if (sub === '/asset' && req.method === 'GET') return handleProjectAssetGet(req, res, id, u.searchParams.get('path'));
   if (sub === '/upload' && req.method === 'POST') return handleProjectAssetUpload(req, res, id, u.searchParams);
   res.writeHead(405); res.end();

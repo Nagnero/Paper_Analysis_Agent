@@ -168,10 +168,12 @@ export async function compileProject(projectId, mainFile, { timeoutMs = 120_000 
     await run(det.cmd, [main, '--synctex', '--keep-logs']);
   } else if (det.engine === 'latexmk') {
     // latexmk: bib·다중패스·synctex 내부 처리 (Perl 필요)
-    await run(det.cmd, ['-pdf', '-interaction=nonstopmode', '-synctex=1', main]);
+    // -shell-escape: EPS 그림의 epstopdf 자동 변환 등 (그림 누락 방지)
+    await run(det.cmd, ['-pdf', '-shell-escape', '-interaction=nonstopmode', '-synctex=1', main]);
   } else {
     // pdflatex: 직접 다중패스 + bibtex/biber (참고문헌 해결)
-    const pdfArgs = ['-interaction=nonstopmode', '-synctex=1', main];
+    // -shell-escape: EPS 그림의 epstopdf 자동 변환 등 (그림 누락 방지)
+    const pdfArgs = ['-shell-escape', '-interaction=nonstopmode', '-synctex=1', main];
     const first = await run(det.cmd, pdfArgs);
     if (!first.timedOut) {
       const bibLog = await runBibStep(det.cmd, srcDir, base, timeoutMs);
