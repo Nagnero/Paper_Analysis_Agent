@@ -61,6 +61,23 @@ function canRun(cmd, args) {
   });
 }
 
+// --version 출력 캡처(엔진 종류 식별: MiKTeX 여부 등). 실패 시 ''.
+function captureVersion(cmd, args) {
+  return new Promise((resolve) => {
+    let out = '';
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve(out); } };
+    let proc;
+    try { proc = spawn(cmd, args, { shell: spawnShell(cmd), stdio: ['ignore', 'pipe', 'pipe'] }); }
+    catch { return resolve(''); }
+    proc.stdout.on('data', d => { out += d; });
+    proc.stderr.on('data', d => { out += d; });
+    const killer = setTimeout(() => { try { proc.kill(); } catch { /* ignore */ } finish(); }, 8000);
+    proc.on('error', () => { clearTimeout(killer); finish(); });
+    proc.on('close', () => { clearTimeout(killer); finish(); });
+  });
+}
+
 // PATH → 흔한 위치 순으로 실행 가능한 cmd(이름 또는 전체경로)를 찾음.
 async function resolveCmd(engine, versionArgs) {
   if (await canRun(engine, versionArgs)) return engine; // PATH
@@ -81,12 +98,20 @@ export async function detectEngine(force = false) {
   if (override) {
     const base = path.basename(override).replace(/\.exe$/i, '').toLowerCase();
     const known = ENGINES.find(e => e.engine === base) || ENGINES[0];
-    if (await canRun(override, known.versionArgs)) { _cached = { engine: known.engine, cmd: override }; return _cached; }
+    if (await canRun(override, known.versionArgs)) {
+      const ver = await captureVersion(override, known.versionArgs);
+      _cached = { engine: known.engine, cmd: override, isMiktex: /miktex/i.test(ver) };
+      return _cached;
+    }
   }
 
   for (const e of ENGINES) {
     const cmd = await resolveCmd(e.engine, e.versionArgs);
-    if (cmd) { _cached = { engine: e.engine, cmd }; return _cached; }
+    if (cmd) {
+      const ver = await captureVersion(cmd, e.versionArgs);
+      _cached = { engine: e.engine, cmd, isMiktex: /miktex/i.test(ver) };
+      return _cached;
+    }
   }
   _cached = null;
   return null;
@@ -116,8 +141,9 @@ function runOnce(cmd, args, cwd, timeoutMs) {
 }
 
 // .aux 에 인용/참고문헌이 있으면 bibtex, .bcf 가 있으면 biber 를 src 안에서 실행.
-async function runBibStep(cmd, srcDir, base, timeoutMs) {
-  // biblatex(biber)
+// isMiktex 면 bibtex 에 --enable-installer 로 .bst 등 누락 패키지 조용히 자동 설치.
+async function runBibStep(cmd, srcDir, base, timeoutMs, isMiktex) {
+  // biblatex(biber) — biber 는 별도 Perl 도구라 --enable-installer 미지원
   try {
     await fs.stat(path.join(srcDir, base + '.bcf'));
     const r = await runOnce(siblingTool(cmd, 'biber'), [base], srcDir, timeoutMs);
@@ -127,7 +153,8 @@ async function runBibStep(cmd, srcDir, base, timeoutMs) {
   try {
     const aux = await fs.readFile(path.join(srcDir, base + '.aux'), 'utf8');
     if (/\\bibdata|\\citation/.test(aux)) {
-      const r = await runOnce(siblingTool(cmd, 'bibtex'), [base], srcDir, timeoutMs);
+      const inst = isMiktex ? ['--enable-installer'] : [];
+      const r = await runOnce(siblingTool(cmd, 'bibtex'), [...inst, base], srcDir, timeoutMs);
       return `$ bibtex ${base}\n${r.output}\n`;
     }
   } catch { /* no .aux */ }
@@ -173,10 +200,13 @@ export async function compileProject(projectId, mainFile, { timeoutMs = 120_000 
   } else {
     // pdflatex: 직접 다중패스 + bibtex/biber (참고문헌 해결)
     // -shell-escape: EPS 그림의 epstopdf 자동 변환 등 (그림 누락 방지)
-    const pdfArgs = ['-shell-escape', '-interaction=nonstopmode', '-synctex=1', main];
+    // --enable-installer(MiKTeX): 비대화형에서도 누락 패키지·폰트를 묻지 않고 자동 설치
+    //   → 첫 컴파일부터 MDPI 등 템플릿 양식이 깨지지 않음.
+    const inst = det.isMiktex ? ['--enable-installer'] : [];
+    const pdfArgs = [...inst, '-shell-escape', '-interaction=nonstopmode', '-synctex=1', main];
     const first = await run(det.cmd, pdfArgs);
     if (!first.timedOut) {
-      const bibLog = await runBibStep(det.cmd, srcDir, base, timeoutMs);
+      const bibLog = await runBibStep(det.cmd, srcDir, base, timeoutMs, det.isMiktex);
       if (bibLog) {
         log += bibLog;
         await run(det.cmd, pdfArgs); // 참고문헌 반영
