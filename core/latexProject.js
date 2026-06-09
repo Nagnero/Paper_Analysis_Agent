@@ -235,6 +235,26 @@ export async function writeProjectChat(projectId, chats) {
   return arr.length;
 }
 
+// 파일/폴더 이동(드래그&드롭). 경로탈출 차단, 대상 중복·자기하위 이동 거부.
+export async function moveProjectPath(projectId, from, to) {
+  const absFrom = resolveInSrc(projectId, from);
+  const absTo = resolveInSrc(projectId, to);
+  const srcDir = projectSrcDir(projectId);
+  if (absFrom === srcDir) throw new Error('루트는 이동할 수 없습니다.');
+  if (absFrom === absTo) return String(to).replace(/\\/g, '/');
+  let st;
+  try { st = await fs.stat(absFrom); } catch { throw new Error('원본을 찾을 수 없습니다.'); }
+  if (st.isDirectory() && (absTo === absFrom || absTo.startsWith(absFrom + path.sep))) {
+    throw new Error('폴더를 자기 자신 하위로 이동할 수 없습니다.');
+  }
+  let exists = false;
+  try { await fs.access(absTo); exists = true; } catch { /* 없음 */ }
+  if (exists) throw new Error('대상 위치에 같은 이름이 이미 있습니다.');
+  await ensureDir(path.dirname(absTo));
+  await fs.rename(absFrom, absTo);
+  return String(to).replace(/\\/g, '/');
+}
+
 // 새 폴더 생성. 이미 있으면 거부. 경로탈출 차단.
 export async function createProjectFolder(projectId, relPath) {
   const rel = String(relPath || '').trim().replace(/\/+$/, '');

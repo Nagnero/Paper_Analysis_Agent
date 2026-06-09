@@ -1340,6 +1340,26 @@ async function handleProjectChatPut(req, res, id) {
   }
 }
 
+// 파일/폴더 이동(드래그&드롭) — 메인 파일이 이동되면 main_file 갱신
+async function handleProjectMove(req, res, id) {
+  try {
+    const project = await library.getProject(id);
+    if (!project) return jsonResponse(res, 404, { error: 'project not found' });
+    const body = await readJsonBody(req, { maxBytes: 1 << 16 });
+    const from = typeof body.from === 'string' ? body.from.trim() : '';
+    const to = typeof body.to === 'string' ? body.to.trim() : '';
+    if (!from || !to) return jsonResponse(res, 400, { error: 'from/to required' });
+    const moved = await latexProject.moveProjectPath(id, from, to);
+    let mainFile = project.main_file;
+    if (project.main_file === from) { mainFile = moved; await library.updateProject(id, { mainFile }).catch(() => {}); }
+    await library.touchProject(id).catch(() => {});
+    const files = await latexProject.listFiles(id);
+    jsonResponse(res, 200, { ok: true, from, to: moved, files, mainFile });
+  } catch (err) {
+    jsonResponse(res, 400, { error: err.message });
+  }
+}
+
 // 새 폴더 생성(빈 공간/폴더 우클릭 → 새 폴더)
 async function handleProjectFolderCreate(req, res, id) {
   try {
@@ -1474,6 +1494,7 @@ function handleProjectsDispatch(req, res) {
   if (sub === '/file' && req.method === 'GET') return handleProjectFileGet(req, res, id, u.searchParams.get('path'));
   if (sub === '/file' && req.method === 'POST') return handleProjectFileCreate(req, res, id);
   if (sub === '/folder' && req.method === 'POST') return handleProjectFolderCreate(req, res, id);
+  if (sub === '/move' && req.method === 'POST') return handleProjectMove(req, res, id);
   if (sub === '/file' && req.method === 'PUT') return handleProjectFilePut(req, res, id, u.searchParams.get('path'));
   if (sub === '/file' && req.method === 'DELETE') return handleProjectFileDelete(req, res, id, u.searchParams.get('path'));
   if (sub === '/asset' && req.method === 'GET') return handleProjectAssetGet(req, res, id, u.searchParams.get('path'));
