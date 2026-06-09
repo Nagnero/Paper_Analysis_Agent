@@ -49,14 +49,10 @@ function codexConfig(reasoningEffort = DEFAULT_CODEX_REASONING_EFFORT, model = C
 }
 
 function makeDefaults(backend = 'claude') {
-  const out = Object.fromEntries(
+  // 모든 역할 기본값 동일(claude면 Opus). 범위 지정도 Opus.
+  return Object.fromEntries(
     ROLES.map(role => [role, backend === 'codex' ? codexConfig() : claudeConfig()])
   );
-  // 범위 지정은 위치만 찾는 가벼운 작업 — 토큰 절약 위해 기본은 빠르고 저렴한 Haiku
-  if (backend !== 'codex' && out.scopeLocator) {
-    out.scopeLocator = claudeConfig('claude-haiku-4-5-20251001', '');
-  }
-  return out;
 }
 
 const DEFAULTS = Object.freeze(makeDefaults('claude'));

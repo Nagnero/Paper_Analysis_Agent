@@ -1632,6 +1632,7 @@ function enterLatexMode() {
 }
 
 function exitLatexMode() {
+  if (document.body.classList.contains('latex-fullscreen')) setLatexFullscreen(false);
   if (state.mode === 'latex' && state.latexDirty) { saveCurrentLatexFile(); }
   if (latexPane) latexPane.hidden = true;
   if (chatPane) chatPane.hidden = false;
@@ -2526,10 +2527,32 @@ function applySidebarCollapsed(collapsed) {
   try { c = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1'; } catch { /* ignore */ }
   applySidebarCollapsed(c);
 })();
-if (sidebarToggle) sidebarToggle.addEventListener('click', () => {
-  const collapsed = !appLayout.classList.contains('sidebar-collapsed');
+function setSidebarCollapsed(collapsed) {
   applySidebarCollapsed(collapsed);
   try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? '1' : '0'); } catch { /* ignore */ }
+}
+if (sidebarToggle) sidebarToggle.addEventListener('click', () => {
+  setSidebarCollapsed(!appLayout.classList.contains('sidebar-collapsed'));
+});
+const sidebarCollapse = $('sidebarCollapse');
+if (sidebarCollapse) sidebarCollapse.addEventListener('click', () => setSidebarCollapsed(true));
+
+// LaTeX 전체화면 모드 (사이드바·상단바 숨김)
+const latexFullscreenBtn = $('latexFullscreenBtn');
+function setLatexFullscreen(on) {
+  document.body.classList.toggle('latex-fullscreen', !!on);
+  if (latexFullscreenBtn) {
+    latexFullscreenBtn.classList.toggle('active', !!on);
+    latexFullscreenBtn.textContent = on ? '⛶ 해제' : '⛶ 전체화면';
+  }
+  if (pdfViewer && pdfState.available && pdfState.open) pdfViewer.relayout();
+  if (latexEditor) setTimeout(() => latexEditor.layout(), 0);
+}
+if (latexFullscreenBtn) latexFullscreenBtn.addEventListener('click', () => {
+  setLatexFullscreen(!document.body.classList.contains('latex-fullscreen'));
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.body.classList.contains('latex-fullscreen')) setLatexFullscreen(false);
 });
 
 for (const tab of workspaceTabs) {

@@ -8,10 +8,23 @@
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-  <div id="appLayout">
+  <div id="appShell">
+    <header class="top">
+      <button type="button" id="sidebarToggle" class="icon-toggle top-left-toggle" title="사이드바 접기/펼치기" aria-label="사이드바 토글">☰</button>
+      <div class="top-inner">
+        <div class="brand">Korean Paper Agent Console <span class="ver">v0.5.2</span></div>
+        <div class="top-actions">
+          <button type="button" id="pdfToggleBtn" class="pdf-toggle" title="논문 보기/숨기기" hidden>📄 논문</button>
+        </div>
+      </div>
+    </header>
+    <div id="appLayout">
     <aside id="sidebar">
       <div class="sidebar-header">
-        <div class="sidebar-brand">📚 PAA</div>
+        <div class="sidebar-brand-row">
+          <div class="sidebar-brand">📚 PAA</div>
+          <button type="button" id="sidebarCollapse" class="sidebar-collapse-btn" title="사이드바 숨기기" aria-label="사이드바 숨기기">«</button>
+        </div>
         <button type="button" id="newAnalysisBtn" class="sidebar-action primary">＋ 새 작업</button>
       </div>
       <div class="sidebar-section-head">
@@ -30,16 +43,6 @@
       </div>
     </aside>
     <div id="mainArea">
-      <header class="top">
-        <div class="top-inner">
-          <button type="button" id="sidebarToggle" class="icon-toggle" title="사이드바 접기/펼치기" aria-label="사이드바 토글">☰</button>
-          <div class="brand">Korean Paper Agent Console <span class="ver">v0.5.2</span></div>
-          <div class="top-actions">
-            <button type="button" id="pdfToggleBtn" class="pdf-toggle" title="논문 보기/숨기기" hidden>📄 논문</button>
-          </div>
-        </div>
-      </header>
-
       <div id="authBanner" class="auth-banner" hidden>
         <span class="auth-banner-text"></span>
         <button type="button" id="authBannerRefreshBtn" class="btn-secondary">다시 확인</button>
@@ -99,6 +102,7 @@
             <button type="button" id="latexUploadBtn" class="latex-btn" title="이미지 파일 추가 (드래그도 가능)">⬆ 이미지</button>
             <input id="latexAssetInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/bmp,image/svg+xml" hidden multiple />
             <button type="button" id="latexZipBtn" class="latex-btn" title="프로젝트 ZIP 다운로드">⬇ ZIP</button>
+            <button type="button" id="latexFullscreenBtn" class="latex-btn" title="전체화면 (사이드바·상단바 숨김, Esc로 해제)">⛶ 전체화면</button>
             <button type="button" id="latexLogBtn" class="latex-btn" title="컴파일 로그">로그</button>
             <button type="button" id="latexCompileBtn" class="latex-btn primary">컴파일</button>
           </div>
@@ -146,6 +150,7 @@
           <div id="pdfBody" class="pdf-pane-body"></div>
         </aside>
       </div>
+    </div>
     </div>
   </div>
 
