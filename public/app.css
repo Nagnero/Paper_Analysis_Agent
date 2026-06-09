@@ -1632,15 +1632,34 @@ button { font-family: inherit; }
   border-top: 1px solid var(--border);
   background: #15171c;
 }
+/* 드래그해서 채팅 높이 조절하는 손잡이 */
+.latex-chat-resizer {
+  height: 7px; flex-shrink: 0; cursor: row-resize; position: relative;
+  background: transparent; border-top: 1px solid var(--border);
+}
+.latex-chat-resizer::after {
+  content: ''; position: absolute; left: 50%; top: 2px; transform: translateX(-50%);
+  width: 38px; height: 3px; border-radius: 2px; background: var(--border);
+}
+.latex-chat-resizer:hover::after { background: var(--accent); }
+body.resizing-chat { cursor: row-resize; user-select: none; }
+.latex-chat-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 3px 10px; font-size: 11px; color: var(--muted);
+}
+.latex-chat-clear {
+  background: transparent; border: 0; color: var(--muted); cursor: pointer;
+  font: inherit; font-size: 11px; padding: 0;
+}
+.latex-chat-clear:hover { color: var(--text); text-decoration: underline; }
 .latex-chat-log {
-  max-height: 140px;
+  height: 140px;
   overflow-y: auto;
   padding: 6px 10px;
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
-.latex-chat-log:empty { display: none; }
 .latex-chat-msg { font-size: 12px; line-height: 1.4; padding: 4px 8px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
 .latex-chat-msg.user { background: var(--surface-2); color: var(--text); align-self: flex-end; max-width: 90%; }
 .latex-chat-msg.ai { background: rgba(79, 158, 255, 0.1); color: #cfe2ff; align-self: flex-start; max-width: 95%; }

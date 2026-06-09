@@ -421,6 +421,7 @@ const state = {
   currentProjectId: null,
   currentLatexFile: null,
   latexPreview: null,
+  latexChatHistory: [],
   latexFiles: [],
   latexProjects: [],
   latexDirty: false,
@@ -493,6 +494,9 @@ const zipInput = $('zipInput');
 const latexChatLog = $('latexChatLog');
 const latexChatInput = $('latexChatInput');
 const latexChatSend = $('latexChatSend');
+const latexChatResizer = $('latexChatResizer');
+const latexChatClear = $('latexChatClear');
+const LATEX_CHAT_H_KEY = 'paa.latexChatLogH';
 const chatMainEl = document.querySelector('.chat-main');
 const settingsModal = $('settingsModal');
 const savePromptsBtn = $('savePromptsBtn');
@@ -1686,6 +1690,7 @@ async function openLatexProject(id) {
     state.latexDirty = false;
     enterLatexMode();
     showLatexEditorPane();
+    restoreLatexChat(id);
     if (latexTitle) { latexTitle.textContent = project.name || 'LaTeX 프로젝트'; latexTitle.title = project.name || ''; }
     renderLatexFileTree();
     try {
@@ -1921,13 +1926,59 @@ function appendLatexChat(role, text) {
   return el;
 }
 
+// ---- 작성팀 채팅 로그: 프로젝트별 localStorage 영속 ----
+function latexChatKey(id) { return `paa.latexChat.${id}`; }
+
+function persistLatexChat() {
+  if (!state.currentProjectId) return;
+  try {
+    // 최근 100개만 보관
+    const trimmed = state.latexChatHistory.slice(-100);
+    state.latexChatHistory = trimmed;
+    localStorage.setItem(latexChatKey(state.currentProjectId), JSON.stringify(trimmed));
+  } catch { /* ignore */ }
+}
+
+// 완료된 메시지를 기록(c = 'user' | 'ai' | 'ai error', text = 최종 표시 텍스트)
+function recordLatexChat(c, text) {
+  state.latexChatHistory.push({ c, text });
+  persistLatexChat();
+}
+
+// 프로젝트 열 때 저장된 로그 복원(없으면 비움)
+function restoreLatexChat(projectId) {
+  state.latexChatHistory = [];
+  try {
+    const raw = localStorage.getItem(latexChatKey(projectId));
+    if (raw) state.latexChatHistory = JSON.parse(raw) || [];
+  } catch { state.latexChatHistory = []; }
+  if (!latexChatLog) return;
+  latexChatLog.innerHTML = '';
+  for (const m of state.latexChatHistory) {
+    const el = document.createElement('div');
+    el.className = 'latex-chat-msg ' + (m.c || 'ai');
+    el.textContent = m.text || '';
+    latexChatLog.appendChild(el);
+  }
+  latexChatLog.scrollTop = latexChatLog.scrollHeight;
+}
+
+function clearLatexChat() {
+  state.latexChatHistory = [];
+  if (latexChatLog) latexChatLog.innerHTML = '';
+  if (state.currentProjectId) {
+    try { localStorage.removeItem(latexChatKey(state.currentProjectId)); } catch { /* ignore */ }
+  }
+}
+
 async function sendLatexChat() {
   const instruction = (latexChatInput && latexChatInput.value || '').trim();
   if (!instruction || state.latexChatBusy) return;
   if (!state.currentProjectId || !state.currentLatexFile) { showToast('편집할 파일을 먼저 여세요'); return; }
   state.latexChatBusy = true;
   if (latexChatSend) latexChatSend.disabled = true;
-  appendLatexChat('user', instruction);
+  const userEl = appendLatexChat('user', instruction);
+  if (userEl) recordLatexChat('user', userEl.textContent);
   latexChatInput.value = '';
   const pending = appendLatexChat('ai', '🧭 시작…');
   pending.classList.add('working');
@@ -1966,12 +2017,14 @@ async function sendLatexChat() {
     // 근거 탐색(읽기 전용): 파일·PDF 변경 없이 답변만 표시
     if (final.readOnly) {
       pending.textContent = `🔎 ${final.answer || final.note || '결과 없음'}`;
+      recordLatexChat('ai', pending.textContent);
       latexChatLog.scrollTop = latexChatLog.scrollHeight;
       return;
     }
 
     const moduleLabel = { writing: '✍️ 본문', figure: '📊 그림/표', citation: '📚 인용' }[final.module] || '';
     pending.textContent = `🤖 ${moduleLabel ? '[' + moduleLabel + '] ' : ''}${final.note || '수정 완료'}`;
+    recordLatexChat('ai', pending.textContent);
     if (latexEditor && typeof final.content === 'string' && final.file === state.currentLatexFile) {
       if (state.latexPreview) { showLatexEditorPane(); renderLatexFileTree(); }
       latexEditor.setContent(state.currentLatexFile, final.content);
@@ -1986,6 +2039,7 @@ async function sendLatexChat() {
     pending.classList.remove('working');
     pending.textContent = '🤖 실패: ' + err.message;
     pending.classList.add('error');
+    recordLatexChat('ai error', pending.textContent);
   } finally {
     state.latexChatBusy = false;
     if (latexChatSend) latexChatSend.disabled = false;
@@ -2342,6 +2396,38 @@ if (latexAssetInput) latexAssetInput.addEventListener('change', async () => {
 if (latexChatSend) latexChatSend.addEventListener('click', sendLatexChat);
 if (latexChatInput) latexChatInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendLatexChat(); }
+});
+if (latexChatClear) latexChatClear.addEventListener('click', () => {
+  if (state.latexChatHistory.length && !confirm('이 프로젝트의 채팅 로그를 지울까요?')) return;
+  clearLatexChat();
+});
+
+// 채팅 로그 높이: 저장값 복원 + 드래그 리사이즈
+(function initLatexChatHeight() {
+  if (!latexChatLog) return;
+  let saved = 0;
+  try { saved = Number(localStorage.getItem(LATEX_CHAT_H_KEY)) || 0; } catch { /* ignore */ }
+  if (saved > 0) latexChatLog.style.height = saved + 'px';
+})();
+if (latexChatResizer) latexChatResizer.addEventListener('mousedown', (e) => {
+  e.preventDefault();
+  const startY = e.clientY;
+  const startH = latexChatLog.getBoundingClientRect().height;
+  const paneH = (latexPane && latexPane.clientHeight) || 600;
+  const maxH = Math.max(120, Math.round(paneH * 0.6));
+  document.body.classList.add('resizing-chat');
+  const onMove = (ev) => {
+    const h = Math.min(maxH, Math.max(80, startH + (startY - ev.clientY))); // 위로 끌면 커짐
+    latexChatLog.style.height = h + 'px';
+  };
+  const onUp = () => {
+    document.body.classList.remove('resizing-chat');
+    window.removeEventListener('mousemove', onMove);
+    window.removeEventListener('mouseup', onUp);
+    try { localStorage.setItem(LATEX_CHAT_H_KEY, String(Math.round(latexChatLog.getBoundingClientRect().height))); } catch { /* ignore */ }
+  };
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('mouseup', onUp);
 });
 if (latexZipBtn) latexZipBtn.addEventListener('click', () => {
   if (!state.currentProjectId) return;
