@@ -422,6 +422,7 @@ const state = {
   currentLatexFile: null,
   latexPreview: null,
   latexChatHistory: [],
+  latexDiffPending: null,
   latexFiles: [],
   latexProjects: [],
   latexDirty: false,
@@ -485,6 +486,10 @@ const latexEditorHost = $('latexEditorHost');
 const latexAssetView = $('latexAssetView');
 const latexUploadBtn = $('latexUploadBtn');
 const latexAssetInput = $('latexAssetInput');
+const latexDiffHost = $('latexDiffHost');
+const latexDiffBar = $('latexDiffBar');
+const latexDiffKeep = $('latexDiffKeep');
+const latexDiffRevert = $('latexDiffRevert');
 const latexLog = $('latexLog');
 const latexLogBody = $('latexLogBody');
 const latexLogClose = $('latexLogClose');
@@ -1689,6 +1694,7 @@ async function openLatexProject(id) {
     state.latexFiles = files || [];
     state.latexDirty = false;
     enterLatexMode();
+    closeLatexDiff();
     showLatexEditorPane();
     restoreLatexChat(id);
     if (latexTitle) { latexTitle.textContent = project.name || 'LaTeX 프로젝트'; latexTitle.title = project.name || ''; }
@@ -1782,9 +1788,45 @@ function showLatexEditorPane() {
   if (latexEditor) setTimeout(() => latexEditor.layout(), 0);
 }
 
+// 수정 전/후 diff 비교 열기
+function showLatexDiff(before, after, file) {
+  if (!latexEditor || !latexEditor.showDiff || !latexDiffHost) return;
+  state.latexDiffPending = { before, after, file };
+  if (latexAssetView) latexAssetView.hidden = true;
+  if (latexEditorHost) latexEditorHost.style.display = 'none';
+  latexDiffHost.style.display = '';
+  latexEditor.showDiff(latexDiffHost, file, before, after);
+  if (latexDiffBar) latexDiffBar.hidden = false;
+}
+
+// diff 닫고 일반 에디터로 복귀
+function closeLatexDiff() {
+  state.latexDiffPending = null;
+  if (latexEditor && latexEditor.closeDiff) latexEditor.closeDiff();
+  if (latexDiffHost) latexDiffHost.style.display = 'none';
+  if (latexDiffBar) latexDiffBar.hidden = true;
+  if (latexEditorHost) latexEditorHost.style.display = '';
+  if (latexEditor) setTimeout(() => latexEditor.layout(), 0);
+}
+
+// "되돌리기": 수정 전 내용으로 파일을 되돌리고 재컴파일
+async function revertLatexDiff() {
+  const d = state.latexDiffPending;
+  if (!d || !latexEditor) { closeLatexDiff(); return; }
+  closeLatexDiff();
+  if (d.file !== state.currentLatexFile) { showToast('다른 파일로 이동해 되돌릴 수 없습니다'); return; }
+  latexEditor.setContent(d.file, d.before);
+  state.latexDirty = true;
+  updateLatexSaveState();
+  await saveCurrentLatexFile();
+  await compileLatex();
+  showToast('수정 전으로 되돌렸습니다');
+}
+
 // 이미지 파일 미리보기 (편집 대상은 바뀌지 않음)
 function showLatexImage(filePath) {
   if (!state.currentProjectId || !latexAssetView) return;
+  if (state.latexDiffPending) closeLatexDiff();
   state.latexPreview = filePath;
   if (latexEditorHost) latexEditorHost.style.display = 'none';
   latexAssetView.hidden = false;
@@ -1803,7 +1845,8 @@ function showLatexImage(filePath) {
 
 async function loadLatexFile(filePath) {
   if (!state.currentProjectId) return;
-  if (filePath === state.currentLatexFile && !state.latexPreview) return;
+  if (filePath === state.currentLatexFile && !state.latexPreview && !state.latexDiffPending) return;
+  if (state.latexDiffPending) closeLatexDiff();
   if (state.latexDirty) await saveCurrentLatexFile();
   try {
     const res = await fetch(`/api/library/projects/${state.currentProjectId}/file?path=${encodeURIComponent(filePath)}`);
@@ -2027,9 +2070,12 @@ async function sendLatexChat() {
     recordLatexChat('ai', pending.textContent);
     if (latexEditor && typeof final.content === 'string' && final.file === state.currentLatexFile) {
       if (state.latexPreview) { showLatexEditorPane(); renderLatexFileTree(); }
+      const beforeContent = latexEditor.getValue();
       latexEditor.setContent(state.currentLatexFile, final.content);
       state.latexDirty = false;
       updateLatexSaveState();
+      // 수정 전/후 비교 뷰 자동 표시(실제 변경이 있을 때만)
+      if (beforeContent !== final.content) showLatexDiff(beforeContent, final.content, state.currentLatexFile);
     }
     showLatexLog(final.log || '');
     setLatexCompileStatus(final.compiled ? 'ok' : 'fail');
@@ -2401,6 +2447,8 @@ if (latexChatClear) latexChatClear.addEventListener('click', () => {
   if (state.latexChatHistory.length && !confirm('이 프로젝트의 채팅 로그를 지울까요?')) return;
   clearLatexChat();
 });
+if (latexDiffKeep) latexDiffKeep.addEventListener('click', () => closeLatexDiff());
+if (latexDiffRevert) latexDiffRevert.addEventListener('click', () => revertLatexDiff());
 
 // 채팅 로그 높이: 저장값 복원 + 드래그 리사이즈
 (function initLatexChatHeight() {

@@ -104,7 +104,13 @@
           <div class="latex-body">
             <div id="latexFileTree" class="latex-filetree"></div>
             <div id="latexEditorHost" class="latex-editor"></div>
+            <div id="latexDiffHost" class="latex-editor" style="display:none"></div>
             <div id="latexAssetView" class="latex-asset-view" hidden></div>
+            <div id="latexDiffBar" class="latex-diff-bar" hidden>
+              <span class="latex-diff-label">수정 전 ↔ 후 비교</span>
+              <button type="button" id="latexDiffRevert" class="latex-btn">되돌리기</button>
+              <button type="button" id="latexDiffKeep" class="latex-btn primary">유지</button>
+            </div>
           </div>
           <div id="latexLog" class="latex-log" hidden>
             <div class="latex-log-head"><span>컴파일 로그</span><button type="button" id="latexLogClose" class="latex-log-close" aria-label="로그 닫기">×</button></div>

@@ -1573,7 +1573,16 @@ button { font-family: inherit; }
 }
 .latex-engine-banner[hidden] { display: none; }
 .latex-engine-banner a { color: var(--accent); }
-.latex-body { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+.latex-body { flex: 1; min-height: 0; display: flex; overflow: hidden; position: relative; }
+/* 수정 전/후 비교 플로팅 툴바 */
+.latex-diff-bar {
+  position: absolute; top: 8px; right: 16px; z-index: 20;
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px 6px 12px; border: 1px solid var(--border); border-radius: 8px;
+  background: rgba(18, 20, 26, 0.94); box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+}
+.latex-diff-bar[hidden] { display: none; }
+.latex-diff-label { font-size: 12px; color: var(--muted); }
 .latex-filetree {
   flex: 0 0 200px; min-width: 120px; overflow: auto;
   border-right: 1px solid var(--border); background: #15171c; padding: 6px 0;
