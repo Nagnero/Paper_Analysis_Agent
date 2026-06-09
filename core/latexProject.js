@@ -141,21 +141,26 @@ export async function detectMainTex(projectId, knownFiles = null) {
   return texFiles.find(f => /(^|\/)main\.tex$/i.test(f)) || texFiles[0];
 }
 
-// 소스 트리 평탄 목록. 각 항목 { path(상대,posix), size, editable, kind }
+// 소스 트리 평탄 목록. 파일 { path, size, editable, kind } + 빈 폴더 { path, dir:true }
 export async function listFiles(projectId) {
   const srcDir = projectSrcDir(projectId);
   const raw = []; // { path, size }
+  const allDirs = []; // 모든 디렉터리 상대경로
+  const dirsWithFiles = new Set(); // 파일이 (재귀적으로) 들어있는 디렉터리
   async function walk(absDir, relDir) {
     let entries;
     try { entries = await fs.readdir(absDir, { withFileTypes: true }); }
     catch { return; }
     for (const e of entries) {
       const rel = relDir ? `${relDir}/${e.name}` : e.name;
-      if (e.isDirectory()) { await walk(path.join(absDir, e.name), rel); continue; }
+      if (e.isDirectory()) { allDirs.push(rel); await walk(path.join(absDir, e.name), rel); continue; }
       if (isArtifactPath(rel)) continue; // 컴파일 산출물 숨김(.pdf 제외)
       let size = 0;
       try { size = (await fs.stat(path.join(absDir, e.name))).size; } catch { /* ignore */ }
       raw.push({ path: rel, size });
+      // 이 파일의 조상 디렉터리 모두 표시
+      let p = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
+      while (p) { dirsWithFiles.add(p); p = p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''; }
     }
   }
   await walk(srcDir, '');
@@ -165,6 +170,10 @@ export async function listFiles(projectId) {
   const out = raw
     .filter(f => !(isPdfPath(f.path) && texBases.has(f.path.replace(/\.pdf$/i, ''))))
     .map(f => ({ path: f.path, size: f.size, editable: isEditablePath(f.path), kind: fileKind(f.path) }));
+  // 파일이 하나도 없는 빈 폴더는 별도 dir 항목으로 추가(트리에 보이도록)
+  for (const d of allDirs) {
+    if (!dirsWithFiles.has(d)) out.push({ path: d, dir: true });
+  }
   out.sort((a, b) => a.path.localeCompare(b.path));
   return out;
 }
@@ -203,6 +212,18 @@ export async function createProjectFile(projectId, relPath) {
   if (exists) throw new Error('이미 존재하는 파일입니다.');
   await ensureDir(path.dirname(abs));
   await fs.writeFile(abs, '', 'utf8');
+  return rel.replace(/\\/g, '/');
+}
+
+// 새 폴더 생성. 이미 있으면 거부. 경로탈출 차단.
+export async function createProjectFolder(projectId, relPath) {
+  const rel = String(relPath || '').trim().replace(/\/+$/, '');
+  if (!rel) throw new Error('폴더 이름이 필요합니다.');
+  const abs = resolveInSrc(projectId, rel);
+  let exists = false;
+  try { await fs.access(abs); exists = true; } catch { /* 없음 */ }
+  if (exists) throw new Error('이미 존재합니다.');
+  await ensureDir(abs);
   return rel.replace(/\\/g, '/');
 }
 

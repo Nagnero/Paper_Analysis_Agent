@@ -1728,18 +1728,21 @@ async function openLatexProject(id) {
   }
 }
 
-// 평탄 파일 목록 → 중첩 디렉터리 트리
+// 평탄 목록(파일 + 빈 폴더 dir 항목) → 중첩 디렉터리 트리
 function buildLatexTree(files) {
   const root = { dirs: new Map(), files: [] };
-  for (const f of files) {
-    const parts = f.path.split('/');
+  const ensureNode = (parts) => {
     let node = root;
-    for (let i = 0; i < parts.length - 1; i++) {
-      const d = parts[i];
+    for (const d of parts) {
       if (!node.dirs.has(d)) node.dirs.set(d, { dirs: new Map(), files: [] });
       node = node.dirs.get(d);
     }
-    node.files.push(f);
+    return node;
+  };
+  for (const f of files) {
+    const parts = f.path.split('/');
+    if (f.dir) { ensureNode(parts); continue; } // 빈 폴더 노드 보장
+    ensureNode(parts.slice(0, -1)).files.push(f);
   }
   return root;
 }
@@ -1880,8 +1883,10 @@ function openLatexCtxMenu(x, y, target) {
   };
   if (target.type === 'empty') {
     addItem('📄 새 파일', 'newfile');
+    addItem('📁 새 폴더', 'newfolder');
   } else if (target.type === 'dir') {
     addItem('📄 여기에 새 파일', 'newfile');
+    addItem('📁 여기에 새 폴더', 'newfolder');
     addItem('🗑 삭제', 'delete');
   } else {
     addItem('🗑 삭제', 'delete');
@@ -1897,15 +1902,15 @@ function closeLatexCtxMenu() {
   latexCtxTarget = null;
 }
 
-// 새 파일: 트리에 인라인 입력칸을 띄워 이름을 받는다(Electron은 prompt 미지원)
-function startNewLatexFile(dir) {
+// 새 파일/폴더: 트리에 인라인 입력칸을 띄워 이름을 받는다(Electron은 prompt 미지원)
+function startNewLatexEntry(dir, kind) {
   if (!state.currentProjectId || !latexFileTree) return;
   latexFileTree.querySelector('.latex-newfile')?.remove();
   const row = document.createElement('div');
   row.className = 'latex-newfile';
   const input = document.createElement('input');
   input.type = 'text';
-  input.placeholder = (dir ? dir + '/' : '') + '파일명.tex';
+  input.placeholder = (dir ? dir + '/' : '') + (kind === 'folder' ? '폴더명' : '파일명.tex');
   row.appendChild(input);
   latexFileTree.prepend(row);
   input.focus();
@@ -1915,7 +1920,9 @@ function startNewLatexFile(dir) {
     const name = input.value.trim();
     row.remove();
     if (!commit || !name) return;
-    await createLatexFileApi(dir ? `${dir}/${name}` : name);
+    const rel = dir ? `${dir}/${name}` : name;
+    if (kind === 'folder') await createLatexEntryApi('folder', rel);
+    else await createLatexEntryApi('file', rel);
   };
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); finish(true); }
@@ -1924,16 +1931,16 @@ function startNewLatexFile(dir) {
   input.addEventListener('blur', () => finish(true));
 }
 
-async function createLatexFileApi(rel) {
+async function createLatexEntryApi(kind, rel) {
   try {
-    const res = await fetch(`/api/library/projects/${state.currentProjectId}/file`, {
+    const res = await fetch(`/api/library/projects/${state.currentProjectId}/${kind === 'folder' ? 'folder' : 'file'}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: rel }),
     });
     const j = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
     state.latexFiles = j.files || state.latexFiles;
     renderLatexFileTree();
-    await loadLatexFile(j.path);
+    if (kind === 'file' && j.path) await loadLatexFile(j.path); // 파일은 바로 열기
     showToast('생성됨: ' + j.path);
   } catch (err) {
     showToast('생성 실패: ' + err.message);
@@ -2598,8 +2605,10 @@ if (latexCtxMenu) latexCtxMenu.addEventListener('click', (e) => {
   const act = e.target.closest('[data-act]')?.dataset.act;
   const target = latexCtxTarget;
   closeLatexCtxMenu();
+  const dir = target && target.type === 'dir' ? target.path : '';
   if (act === 'delete') deleteLatexPath(target);
-  else if (act === 'newfile') startNewLatexFile(target && target.type === 'dir' ? target.path : '');
+  else if (act === 'newfile') startNewLatexEntry(dir, 'file');
+  else if (act === 'newfolder') startNewLatexEntry(dir, 'folder');
 });
 document.addEventListener('click', (e) => {
   if (latexCtxMenu && !latexCtxMenu.hidden && !latexCtxMenu.contains(e.target)) closeLatexCtxMenu();
