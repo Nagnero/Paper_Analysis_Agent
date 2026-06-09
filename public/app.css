@@ -122,7 +122,7 @@ body.resizing .pane-resizer { background: var(--accent); }
 .pane-resizer[hidden] { display: none; }
 #pdfPane {
   flex: 0 0 auto;
-  width: 46%;
+  width: 50%;
   min-width: 280px;
   display: flex;
   flex-direction: column;

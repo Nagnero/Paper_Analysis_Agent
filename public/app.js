@@ -537,7 +537,8 @@ const pdfSelectBtn = $('pdfSelectBtn');
 const paneResizer = $('paneResizer');
 const pdfTitleEl = $('pdfTitle');
 const pdfOpenExternal = $('pdfOpenExternal');
-const PDF_WIDTH_KEY = 'paa.pdfPaneWidth';
+// v2: 기본값을 5:5(50%)로 바꾸면서 예전(작게 저장된) 폭 선호를 1회 초기화
+const PDF_WIDTH_KEY = 'paa.pdfPaneWidth.v2';
 
 const pdfViewer = pdfBody ? createPdfViewer(pdfBody) : null;
 const selectionChip = $('selectionChip');
@@ -659,6 +660,19 @@ function setPdfWidth(px) {
   if (pdfPane) pdfPane.style.width = clampPdfWidth(px) + 'px';
 }
 
+// 워크스페이스의 절반(5:5)
+function halfPdfWidth() {
+  const total = workspaceEl ? workspaceEl.clientWidth : window.innerWidth;
+  return Math.round(total * 0.5);
+}
+
+// PDF 패널 폭을 적용: 사용자가 직접 조절해 저장한 값이 있으면 그걸, 없으면 기본 5:5
+function ensurePdfWidth() {
+  let saved = 0;
+  try { saved = Number(localStorage.getItem(PDF_WIDTH_KEY)) || 0; } catch { /* ignore */ }
+  setPdfWidth(saved > 0 ? saved : halfPdfWidth());
+}
+
 // 저장된 논문 PDF를 서버에서 로드. title 생략 시 기존 제목 유지.
 function showPaperPdf(paperId, title) {
   if (!pdfViewer) return;
@@ -670,6 +684,7 @@ function showPaperPdf(paperId, title) {
   pdfState.paperId = paperId;
   pdfState.available = true;
   pdfState.open = true;
+  ensurePdfWidth(); // 기본 5:5 (load 전에 폭을 맞춰 렌더 스케일이 작아지지 않게)
   applyPdfLayout();
   // 같은 논문을 다시 열면 재로드 생략(깜빡임 방지)
   if (pdfViewer.currentPaperId !== paperId) {
@@ -678,6 +693,7 @@ function showPaperPdf(paperId, title) {
       .then(() => rerenderEvidenceMessages())
       .catch(err => console.warn('PDF 로드 실패', err));
   } else if (pdfViewer.isLoaded()) {
+    pdfViewer.relayout();
     rerenderEvidenceMessages();
   }
 }
@@ -696,6 +712,7 @@ function showLocalPdf(file) {
   pdfViewer.currentPaperId = null;
   pdfState.available = true;
   pdfState.open = true;
+  ensurePdfWidth(); // 기본 5:5
   applyPdfLayout();
   pdfViewer.load(pdfState.blobUrl)
     .then(() => rerenderEvidenceMessages())
