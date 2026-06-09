@@ -60,5 +60,8 @@
 {{content}}
 ```
 
+## 이전 대화 (참고)
+{{history}}
+
 ## 지시
 {{instruction}}

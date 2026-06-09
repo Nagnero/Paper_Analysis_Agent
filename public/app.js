@@ -2029,6 +2029,8 @@ async function sendLatexChat() {
   if (!state.currentProjectId || !state.currentLatexFile) { showToast('편집할 파일을 먼저 여세요'); return; }
   state.latexChatBusy = true;
   if (latexChatSend) latexChatSend.disabled = true;
+  // 직전까지의 대화(현재 지시 제외)를 함께 보내 맥락 유지 — "그 부분", "알아서 수정" 해석용
+  const historyToSend = state.latexChatHistory.slice(-8).map((h) => ({ c: h.c, text: h.text }));
   const userEl = appendLatexChat('user', instruction);
   if (userEl) recordLatexChat('user', userEl.textContent);
   latexChatInput.value = '';
@@ -2038,7 +2040,7 @@ async function sendLatexChat() {
     if (state.latexDirty) await saveCurrentLatexFile(); // 현재 편집분 먼저 저장
     const res = await fetch(`/api/library/projects/${state.currentProjectId}/chat-edit`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file: state.currentLatexFile, instruction }),
+      body: JSON.stringify({ file: state.currentLatexFile, instruction, history: historyToSend }),
     });
     if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.error || `HTTP ${res.status}`); }
 
