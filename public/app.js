@@ -2145,6 +2145,7 @@ async function sendLatexChat() {
   const userEl = appendLatexChat('user', instruction);
   if (userEl) recordLatexChat('user', userEl.textContent);
   latexChatInput.value = '';
+  latexChatInput.style.height = 'auto'; // 전송 후 높이 초기화
   const pending = appendLatexChat('ai', '🧭 시작…');
   pending.classList.add('working');
   try {
@@ -2562,10 +2563,19 @@ if (latexAssetInput) latexAssetInput.addEventListener('change', async () => {
   for (const f of files) await uploadProjectAsset(f);
   latexAssetInput.value = '';
 });
+function autoGrowLatexChat() {
+  if (!latexChatInput) return;
+  latexChatInput.style.height = 'auto';
+  latexChatInput.style.height = Math.min(latexChatInput.scrollHeight, 160) + 'px';
+}
 if (latexChatSend) latexChatSend.addEventListener('click', sendLatexChat);
-if (latexChatInput) latexChatInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendLatexChat(); }
-});
+if (latexChatInput) {
+  latexChatInput.addEventListener('keydown', (e) => {
+    // Enter 전송, Shift+Enter 줄바꿈
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendLatexChat(); }
+  });
+  latexChatInput.addEventListener('input', autoGrowLatexChat);
+}
 if (latexChatClear) latexChatClear.addEventListener('click', () => {
   if (state.latexChatHistory.length && !confirm('이 프로젝트의 채팅 로그를 지울까요?')) return;
   clearLatexChat();
