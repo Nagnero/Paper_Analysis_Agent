@@ -546,8 +546,8 @@ const pdfSelectBtn = $('pdfSelectBtn');
 const paneResizer = $('paneResizer');
 const pdfTitleEl = $('pdfTitle');
 const pdfOpenExternal = $('pdfOpenExternal');
-// v2: 기본값을 5:5(50%)로 바꾸면서 예전(작게 저장된) 폭 선호를 1회 초기화
-const PDF_WIDTH_KEY = 'paa.pdfPaneWidth.v2';
+// 비율(0~1)로 저장 → 창 크기가 바뀌어도 PDF:편집기 비율 유지. 기본 5:5.
+const PDF_RATIO_KEY = 'paa.pdfPaneRatio';
 
 const pdfViewer = pdfBody ? createPdfViewer(pdfBody) : null;
 const selectionChip = $('selectionChip');
@@ -658,29 +658,43 @@ function setPdfSelectionMode(enabled) {
   setComposerHint(active ? 'PDF에서 질문할 영역을 드래그하세요.' : '');
 }
 
+function workspaceWidth() {
+  return (workspaceEl ? workspaceEl.clientWidth : window.innerWidth) || window.innerWidth;
+}
+
 function clampPdfWidth(px) {
-  const total = workspaceEl ? workspaceEl.clientWidth : window.innerWidth;
+  const total = workspaceWidth();
   const min = 280;
   const max = Math.max(min, total - 360); // 채팅 영역 최소 360px 보장
   return Math.min(Math.max(px, min), max);
 }
 
+// PDF 패널 폭을 "비율"로 관리 → 창 크기가 바뀌어도 비율 유지(전체화면 전환 등).
+let pdfRatio = (() => {
+  try { const r = Number(localStorage.getItem(PDF_RATIO_KEY)); if (r >= 0.15 && r <= 0.85) return r; } catch { /* ignore */ }
+  return 0.5; // 기본 5:5
+})();
+
+// 현재 비율을 워크스페이스 폭에 맞춰 px 로 적용
+function applyPdfRatio(ratio = pdfRatio) {
+  pdfRatio = Math.min(0.85, Math.max(0.15, ratio));
+  if (pdfPane) pdfPane.style.width = clampPdfWidth(pdfRatio * workspaceWidth()) + 'px';
+}
+
+// 드래그 중: px 로 직접 지정하되 비율도 갱신
 function setPdfWidth(px) {
-  if (pdfPane) pdfPane.style.width = clampPdfWidth(px) + 'px';
+  if (!pdfPane) return;
+  const w = clampPdfWidth(px);
+  pdfPane.style.width = w + 'px';
+  pdfRatio = Math.min(0.85, Math.max(0.15, w / workspaceWidth()));
 }
 
-// 워크스페이스의 절반(5:5)
-function halfPdfWidth() {
-  const total = workspaceEl ? workspaceEl.clientWidth : window.innerWidth;
-  return Math.round(total * 0.5);
+function savePdfRatio() {
+  try { localStorage.setItem(PDF_RATIO_KEY, String(pdfRatio.toFixed(4))); } catch { /* ignore */ }
 }
 
-// PDF 패널 폭을 적용: 사용자가 직접 조절해 저장한 값이 있으면 그걸, 없으면 기본 5:5
-function ensurePdfWidth() {
-  let saved = 0;
-  try { saved = Number(localStorage.getItem(PDF_WIDTH_KEY)) || 0; } catch { /* ignore */ }
-  setPdfWidth(saved > 0 ? saved : halfPdfWidth());
-}
+// PDF 패널 폭 적용(현재 비율 기준; 기본 5:5)
+function ensurePdfWidth() { applyPdfRatio(pdfRatio); }
 
 // 저장된 논문 PDF를 서버에서 로드. title 생략 시 기존 제목 유지.
 function showPaperPdf(paperId, title) {
@@ -815,12 +829,12 @@ if (paneResizer) {
     const startX = e.clientX;
     const startW = pdfPane.getBoundingClientRect().width;
     document.body.classList.add('resizing');
-    const onMove = (ev) => setPdfWidth(startW + (startX - ev.clientX)); // 좌로 끌면 넓어짐
+    const onMove = (ev) => setPdfWidth(startW + (startX - ev.clientX)); // 좌로 끌면 넓어짐 (비율도 갱신)
     const onUp = () => {
       document.body.classList.remove('resizing');
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
-      try { localStorage.setItem(PDF_WIDTH_KEY, String(Math.round(pdfPane.getBoundingClientRect().width))); } catch { /* ignore */ }
+      savePdfRatio(); // 드래그로 정한 비율 저장 → 다음에도, 창 크기 바뀌어도 유지
       if (pdfViewer) pdfViewer.relayout();
     };
     window.addEventListener('mousemove', onMove);
@@ -830,16 +844,11 @@ if (paneResizer) {
 
 let resizeTimer = 0;
 window.addEventListener('resize', () => {
+  // 창 크기가 바뀌면 즉시 비율을 다시 적용해 PDF:편집기 비율 유지(전체화면 전환 등)
+  if (pdfState.available && pdfState.open) applyPdfRatio();
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => { if (pdfViewer && pdfState.available && pdfState.open) pdfViewer.relayout(); }, 250);
+  resizeTimer = setTimeout(() => { if (pdfViewer && pdfState.available && pdfState.open) pdfViewer.relayout(); }, 200);
 });
-
-// 저장된 패널 폭 복원
-(function initPdfWidth() {
-  let saved = 0;
-  try { saved = Number(localStorage.getItem(PDF_WIDTH_KEY)) || 0; } catch { /* ignore */ }
-  if (saved > 0 && pdfPane) pdfPane.style.width = saved + 'px';
-})();
 
 const CLAUDE_MODELS = [
   { value: 'claude-opus-4-8', label: 'Opus 4.8 (기본값, 최고 성능)' },
@@ -1616,7 +1625,7 @@ function enterLatexMode() {
   // 우측 PDF 패널을 컴파일 결과 전용으로: 분석용 컨트롤 숨기고 절반 폭으로
   if (pdfSelectBtn) pdfSelectBtn.hidden = true;
   if (pdfCloseBtn) pdfCloseBtn.hidden = true;
-  if (pdfPane && workspaceEl) pdfPane.style.width = Math.round(workspaceEl.clientWidth * 0.5) + 'px';
+  applyPdfRatio(); // 현재 비율(기본 5:5)로 적용 — 창 크기 바뀌어도 유지
 }
 
 function exitLatexMode() {
