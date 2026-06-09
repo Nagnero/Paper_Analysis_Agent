@@ -1,6 +1,6 @@
 {
   "name": "paa",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": true,
   "description": "영어 논문 PDF를 멀티에이전트로 분석하고 LaTeX 논문을 작성·컴파일하는 데스크탑 콘솔 (Korean Paper Agent Console)",
   "type": "module",
